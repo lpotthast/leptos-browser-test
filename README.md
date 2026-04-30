@@ -2,13 +2,11 @@
 
 Leptos test-app launcher for browser-driven integration tests.
 
-This crate owns the `cargo leptos serve` / `cargo leptos watch` process management for a
-crate-local Leptos test app. It waits until the app is listening and keeps recent stdout/stderr for
-useful startup failures.
+This crate owns the `cargo leptos serve` / `cargo leptos watch` process management for a crate-local Leptos test app.
+It waits until the app is listening and keeps recent stdout/stderr for useful startup failures.
 
-It intentionally leaves browser/WebDriver orchestration to the test harness that uses the returned
-base URL. Use `app.base_url()` with `browser-test`, Playwright, Selenium, `thirtyfour`, or any other
-integration-test harness.
+It intentionally leaves browser/WebDriver orchestration to the test harness that uses the returned base URL. Use
+`app.base_url()` with `browser-test`, Playwright, Selenium, `thirtyfour`, or any other integration-test harness.
 
 ## Runtime requirements
 
@@ -36,11 +34,11 @@ run_browser_tests(app.base_url()).await?;
 # }
 ```
 
-`Report::into_dynamic` erases the typed `Report<LeptosBrowserTestError>` into a generic
-`Report` so it can compose with the test harness's own error type.
+`Report::into_dynamic` erases the typed `Report<LeptosBrowserTestError>` into a generic `Report` so it can compose with
+the test harness's own error type.
 
-Typical `browser-test` usage starts the app, passes its base URL into the runner context, and lets
-drop-based cleanup handle the app process after `BrowserTestRunner::run(...)` returns:
+Typical `browser-test` usage starts the app, passes its base URL into the runner context, and lets drop-based cleanup
+handle the app process after `BrowserTestRunner::run(...)` returns:
 
 ```rust,ignore
 use browser_test::{BrowserTestRunner, BrowserTests};
@@ -86,8 +84,8 @@ let app = LeptosTestAppConfig::new("testing/test-app")
 # }
 ```
 
-For local manual debugging, run the integration test target from the consuming crate and enable
-whatever visibility or pause flags the browser harness supports:
+For local manual debugging, run the integration test target from the consuming crate and enable whatever visibility or
+pause flags the browser harness supports:
 
 ```sh
 cargo test --test your_integration_test -- --nocapture
