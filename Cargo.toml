@@ -1,0 +1,41 @@
+[package]
+name = "leptos-browser-test"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89.0"
+authors = ["Lukas Potthast <privat@lukas-potthast.de>"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/lpotthast/leptos-browser-test"
+documentation = "https://docs.rs/leptos-browser-test"
+description = "Leptos test-app launcher for browser-driven integration tests."
+categories = ["development-tools::testing", "web-programming"]
+keywords = ["leptos", "browser", "webdriver", "testing"]
+exclude = [
+    ".github",
+    ".idea",
+    ".claude",
+    ".vscode",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "Justfile",
+    "tests",
+]
+
+[dependencies]
+rootcause = { version = "0.12.1", default-features = false }
+thiserror = "2.0.18"
+tokio = { version = "1.50.0", default-features = false, features = ["process", "rt", "time"] }
+tokio-process-tools = { version = "0.9.0", default-features = false, features = [] }
+tracing = "0.1.44"
+
+[dev-dependencies]
+assertr = "0.5.7"
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls"] }
+tokio = { version = "1.50.0", features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
+
+[lints.rust]
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = "warn"
