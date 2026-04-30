@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0] - 2026-04-30
 
+### Added
+
 - Public `LeptosTestAppConfig` builder, `LeptosTestApp` handle, and `LeptosBrowserTestError`
   enum for launching a `cargo leptos serve|watch` subprocess and waiting for it to listen.
 - `StartupFailureContext` carries the per-failure diagnostics (`app_name`, `expected_line`,
