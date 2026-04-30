@@ -17,21 +17,21 @@ It intentionally leaves browser/WebDriver orchestration to the test harness that
 ```rust,no_run
 use leptos_browser_test::{LeptosTestAppConfig, Report};
 
-# async fn run_browser_tests(base_url: &str) -> Result<(), Report> {
-#     let _ = base_url;
-#     Ok(())
-# }
-#
-# async fn example() -> Result<(), Report> {
-let app = LeptosTestAppConfig::new("testing/test-app")
-    .with_app_name("my test app")
-    .start()
-    .await
-    .map_err(Report::into_dynamic)?;
+async fn run_browser_tests(base_url: &str) -> Result<(), Report> {
+    let _ = base_url;
+    Ok(())
+}
 
-run_browser_tests(app.base_url()).await?;
-# Ok(())
-# }
+async fn example() -> Result<(), Report> {
+    let app = LeptosTestAppConfig::new("testing/test-app")
+        .with_app_name("my test app")
+        .start()
+        .await
+        .map_err(Report::into_dynamic)?;
+    
+    run_browser_tests(app.base_url()).await?;
+    Ok(())
+}
 ```
 
 `Report::into_dynamic` erases the typed `Report<LeptosBrowserTestError>` into a generic `Report` so it can compose with
@@ -72,16 +72,17 @@ async fn browser_tests() -> Result<(), Report> {
 For apps served over HTTPS, add the scheme override before starting:
 
 ```rust,no_run
-# use leptos_browser_test::{LeptosTestAppConfig, SiteScheme};
-# async fn example() -> Result<(), leptos_browser_test::Report> {
-let app = LeptosTestAppConfig::new("testing/test-app")
-    .with_site_scheme(SiteScheme::Https)
-    .start()
-    .await
-    .map_err(leptos_browser_test::Report::into_dynamic)?;
-# let _ = app;
-# Ok(())
-# }
+use leptos_browser_test::{LeptosTestAppConfig, SiteScheme};
+
+async fn example() -> Result<(), leptos_browser_test::Report> {
+    let app = LeptosTestAppConfig::new("testing/test-app")
+        .with_site_scheme(SiteScheme::Https)
+        .start()
+        .await
+        .map_err(leptos_browser_test::Report::into_dynamic)?;
+    let _ = app;
+Ok(())
+}
 ```
 
 For local manual debugging, run the integration test target from the consuming crate and enable whatever visibility or

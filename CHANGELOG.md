@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.1.1] - 2026-04-30
+
+### Fixed
+
+- Readme examples.
+
 ## [0.1.0] - 2026-04-30
 
 ### Added
@@ -28,3 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Leptos SSR fixture at `tests/fixtures/leptos-ssr-app`.
 - GitHub Actions workflow at `.github/workflows/ci.yml` covering format, check, clippy,
   test, build, doc, and an MSRV gate at the declared `rust-version` (1.89.0).
+
+[Unreleased]: https://github.com/lpotthast/leptos-browser-test/compare/v0.1.1...HEAD
+
+[0.1.1]: https://github.com/lpotthast/leptos-browser-test/compare/v0.1.0...v0.1.1
+
+[0.1.0]: https://github.com/lpotthast/leptos-browser-test/tree/f18da041b8eb4c27606cbe2fcd59d8534693f707
