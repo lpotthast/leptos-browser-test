@@ -63,9 +63,9 @@ jobs:
           workspaces: |
             .
             tests/fixtures/leptos-ssr-app
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-leptos
+      # Fork required: leptos-browser-test sets LEPTOS_GRACEFUL_SHUTDOWN_* env vars
+      # that depend on https://github.com/leptos-rs/cargo-leptos/pull/648 (not yet released).
+      - run: cargo install --locked --git https://github.com/lpotthast/cargo-leptos --branch graceful-shutdown-v2 cargo-leptos
       - run: cargo test --test smoke --locked -- --test-threads=1
 
   build:

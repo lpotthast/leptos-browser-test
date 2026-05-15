@@ -1,21 +1,18 @@
+use crate::{CargoLeptosMode, LeptosBrowserTestError, SiteScheme, app::LeptosTestApp};
+use rootcause::Report;
 use std::{
     ffi::{OsStr, OsString},
     path::PathBuf,
     time::Duration,
 };
-
-use rootcause::Report;
-
-use crate::{CargoLeptosMode, LeptosBrowserTestError, SiteScheme, app::LeptosTestApp};
+use tokio_process_tools::UnixGracefulSignal;
 
 const DEFAULT_STARTUP_LOG_TAIL_LINES: usize = 200;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(60 * 10);
 const DEFAULT_STARTUP_TIMEOUT_REASON: &str =
     "default — generous bound for a cold cargo-leptos compile of server + wasm";
-const DEFAULT_INTERRUPT_TIMEOUT: Duration = Duration::from_secs(3);
-const DEFAULT_TERMINATE_TIMEOUT: Duration = Duration::from_secs(8);
-const DEFAULT_TERMINATION_TIMEOUTS_REASON: &str =
-    "default — graceful cargo-leptos shutdown before SIGKILL";
+const DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_GRACEFUL_SHUTDOWN_UNIX_SIGNAL: UnixGracefulSignal = UnixGracefulSignal::Interrupt;
 
 /// Configuration for a Leptos test app process.
 #[derive(Debug, Clone)]
@@ -31,9 +28,8 @@ pub struct LeptosTestAppConfig {
     pub(crate) startup_timeout: Duration,
     pub(crate) startup_timeout_reason: String,
     pub(crate) startup_log_tail_lines: usize,
-    pub(crate) interrupt_timeout: Duration,
-    pub(crate) terminate_timeout: Duration,
-    pub(crate) termination_timeouts_reason: String,
+    pub(crate) graceful_shutdown_timeout: Duration,
+    pub(crate) graceful_shutdown_unix_signal: UnixGracefulSignal,
     pub(crate) forward_logs: bool,
     pub(crate) extra_env: Vec<(OsString, OsString)>,
 }
@@ -54,9 +50,8 @@ impl LeptosTestAppConfig {
             startup_timeout: DEFAULT_STARTUP_TIMEOUT,
             startup_timeout_reason: DEFAULT_STARTUP_TIMEOUT_REASON.to_owned(),
             startup_log_tail_lines: DEFAULT_STARTUP_LOG_TAIL_LINES,
-            interrupt_timeout: DEFAULT_INTERRUPT_TIMEOUT,
-            terminate_timeout: DEFAULT_TERMINATE_TIMEOUT,
-            termination_timeouts_reason: DEFAULT_TERMINATION_TIMEOUTS_REASON.to_owned(),
+            graceful_shutdown_timeout: DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT,
+            graceful_shutdown_unix_signal: DEFAULT_GRACEFUL_SHUTDOWN_UNIX_SIGNAL,
             forward_logs: true,
             extra_env: Vec::new(),
         }
@@ -122,13 +117,14 @@ impl LeptosTestAppConfig {
         self
     }
 
-    /// Set the startup timeout, with a `reason` describing *why* this value was chosen.
+    /// Set the startup timeout, with a `reason` describing *why* the startup was expected to be
+    /// complete after the chosen value.
     ///
     /// The reason is logged at startup and embedded in
-    /// [`LeptosBrowserTestError::StartupTimedOut`](crate::LeptosBrowserTestError::StartupTimedOut)
+    /// [`LeptosBrowserTestError::StartupTimedOut`](LeptosBrowserTestError::StartupTimedOut)
     /// so a future debugger sees the rationale alongside the elapsed duration. Forcing the
-    /// argument prevents a stale source comment from being the only record of why a number
-    /// was tuned.
+    /// argument prevents a source comment from being the only record of why a particular timeout
+    /// was chosen.
     #[must_use]
     pub fn with_startup_timeout(mut self, timeout: Duration, reason: impl Into<String>) -> Self {
         self.startup_timeout = timeout;
@@ -143,21 +139,33 @@ impl LeptosTestAppConfig {
         self
     }
 
-    /// Set graceful process termination timeouts, with a `reason` describing *why* these
-    /// values were chosen.
+    /// Set the budget the managed Leptos app has to shut down gracefully on drop.
     ///
-    /// The reason is logged when the child is dropped. Forcing the argument keeps the
-    /// rationale next to the numbers instead of in a soon-to-rot source comment.
+    /// Forwarded to `cargo leptos` through the `LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS` environment
+    /// variable. Bounds how long cargo-leptos waits for the application to finish. The `_SECS`
+    /// env-var protocol means resolution is whole seconds. Sub-second values are truncated by
+    /// [`Duration::as_secs`].
+    ///
+    /// Defaults to 10 seconds.
+    ///
+    /// An additional ~10s of slack is given to `cargo leptos` itself to shut down gracefully.
     #[must_use]
-    pub fn with_termination_timeouts(
-        mut self,
-        interrupt_timeout: Duration,
-        terminate_timeout: Duration,
-        reason: impl Into<String>,
-    ) -> Self {
-        self.interrupt_timeout = interrupt_timeout;
-        self.terminate_timeout = terminate_timeout;
-        self.termination_timeouts_reason = reason.into();
+    pub fn with_graceful_shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.graceful_shutdown_timeout = timeout;
+        self
+    }
+
+    /// Set the Unix signal used to ask the managed Leptos app to shut down gracefully.
+    ///
+    /// Forwarded to `cargo leptos` through the `LEPTOS_GRACEFUL_SHUTDOWN_UNIX_SIGNAL` environment
+    /// variable. Ignored on Windows.
+    ///
+    /// Defaults to [`UnixGracefulSignal::Interrupt`] (SIGINT), matching the
+    /// `tokio::signal::ctrl_c()` flow typical tokio-driven apps install. Use
+    /// [`UnixGracefulSignal::Terminate`] (SIGTERM) for service-style children that handle SIGTERM.
+    #[must_use]
+    pub fn with_graceful_shutdown_unix_signal(mut self, signal: UnixGracefulSignal) -> Self {
+        self.graceful_shutdown_unix_signal = signal;
         self
     }
 
@@ -186,10 +194,10 @@ impl LeptosTestAppConfig {
 
     /// Start the configured Leptos test app.
     ///
-    /// The returned [`LeptosTestApp`] terminates the `cargo leptos` process when dropped. Drop-based
-    /// termination uses `tokio_process_tools::TerminateOnDrop`, so tests must run inside a
-    /// multi-threaded Tokio runtime. Use `#[tokio::test(flavor = "multi_thread")]` for Tokio browser
-    /// tests.
+    /// The returned [`LeptosTestApp`] terminates the `cargo leptos` process when dropped.
+    /// Drop-based termination uses `tokio_process_tools::TerminateOnDrop`, so tests must run inside
+    /// a multithreaded Tokio runtime. Use `#[tokio::test(flavor = "multi_thread")]` for Tokio
+    /// browser tests.
     ///
     /// # Errors
     ///
@@ -204,14 +212,14 @@ impl LeptosTestAppConfig {
 mod tests {
     use std::time::Duration;
 
-    use assertr::prelude::*;
-
     use super::{
-        DEFAULT_INTERRUPT_TIMEOUT, DEFAULT_STARTUP_LOG_TAIL_LINES, DEFAULT_STARTUP_TIMEOUT,
-        DEFAULT_STARTUP_TIMEOUT_REASON, DEFAULT_TERMINATE_TIMEOUT,
-        DEFAULT_TERMINATION_TIMEOUTS_REASON, LeptosTestAppConfig,
+        DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT, DEFAULT_GRACEFUL_SHUTDOWN_UNIX_SIGNAL,
+        DEFAULT_STARTUP_LOG_TAIL_LINES, DEFAULT_STARTUP_TIMEOUT, DEFAULT_STARTUP_TIMEOUT_REASON,
+        LeptosTestAppConfig,
     };
     use crate::{CargoLeptosMode, SiteScheme};
+    use assertr::prelude::*;
+    use tokio_process_tools::UnixGracefulSignal;
 
     #[test]
     fn new_uses_documented_defaults() {
@@ -227,20 +235,12 @@ mod tests {
         assert_that!(config.startup_timeout).is_equal_to(DEFAULT_STARTUP_TIMEOUT);
         assert_that!(config.startup_timeout_reason).is_equal_to(DEFAULT_STARTUP_TIMEOUT_REASON);
         assert_that!(config.startup_log_tail_lines).is_equal_to(DEFAULT_STARTUP_LOG_TAIL_LINES);
-        assert_that!(config.interrupt_timeout).is_equal_to(DEFAULT_INTERRUPT_TIMEOUT);
-        assert_that!(config.terminate_timeout).is_equal_to(DEFAULT_TERMINATE_TIMEOUT);
-        assert_that!(config.termination_timeouts_reason)
-            .is_equal_to(DEFAULT_TERMINATION_TIMEOUTS_REASON);
+        assert_that!(config.graceful_shutdown_timeout)
+            .is_equal_to(DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT);
+        assert_that!(config.graceful_shutdown_unix_signal)
+            .is_equal_to(DEFAULT_GRACEFUL_SHUTDOWN_UNIX_SIGNAL);
         assert_that!(config.forward_logs).is_true();
         assert_that!(config.extra_env.is_empty()).is_true();
-    }
-
-    #[test]
-    fn default_constants_match_documented_values() {
-        assert_that!(DEFAULT_STARTUP_LOG_TAIL_LINES).is_equal_to(200);
-        assert_that!(DEFAULT_STARTUP_TIMEOUT).is_equal_to(Duration::from_secs(60 * 10));
-        assert_that!(DEFAULT_INTERRUPT_TIMEOUT).is_equal_to(Duration::from_secs(3));
-        assert_that!(DEFAULT_TERMINATE_TIMEOUT).is_equal_to(Duration::from_secs(8));
     }
 
     #[test]
@@ -258,11 +258,8 @@ mod tests {
                 "tight bound for unit-style smoke test",
             )
             .with_startup_log_tail_lines(10)
-            .with_termination_timeouts(
-                Duration::from_millis(100),
-                Duration::from_millis(500),
-                "test fixture exits immediately on SIGTERM",
-            )
+            .with_graceful_shutdown_timeout(Duration::from_millis(100))
+            .with_graceful_shutdown_unix_signal(UnixGracefulSignal::Terminate)
             .with_forward_logs(false)
             .with_env("FOO", "bar");
 
@@ -277,10 +274,9 @@ mod tests {
         assert_that!(config.startup_timeout_reason)
             .is_equal_to("tight bound for unit-style smoke test");
         assert_that!(config.startup_log_tail_lines).is_equal_to(10);
-        assert_that!(config.interrupt_timeout).is_equal_to(Duration::from_millis(100));
-        assert_that!(config.terminate_timeout).is_equal_to(Duration::from_millis(500));
-        assert_that!(config.termination_timeouts_reason)
-            .is_equal_to("test fixture exits immediately on SIGTERM");
+        assert_that!(config.graceful_shutdown_timeout).is_equal_to(Duration::from_millis(100));
+        assert_that!(config.graceful_shutdown_unix_signal)
+            .is_equal_to(UnixGracefulSignal::Terminate);
         assert_that!(config.forward_logs).is_false();
         assert_that!(config.extra_env.len()).is_equal_to(1);
     }

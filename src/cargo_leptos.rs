@@ -1,10 +1,11 @@
+use std::time::Duration;
 use std::{
     env,
     ffi::{OsStr, OsString},
     path::Path,
 };
-
 use tokio::process::Command;
+use tokio_process_tools::UnixGracefulSignal;
 
 /// `cargo leptos` mode used to start the test app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,12 +33,15 @@ fn resolve_cargo_bin(cargo_bin: Option<&OsStr>) -> OsString {
         .unwrap_or_else(|| OsString::from("cargo"))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn command(
     mode: CargoLeptosMode,
     cargo_bin: Option<&OsStr>,
     app_dir: &Path,
     site_addr: &str,
     reload_port: u16,
+    graceful_shutdown_timeout: Duration,
+    graceful_shutdown_unix_signal: UnixGracefulSignal,
     extra_env: &[(OsString, OsString)],
 ) -> Command {
     let cargo = resolve_cargo_bin(cargo_bin);
@@ -46,6 +50,22 @@ pub(crate) fn command(
         .arg(mode.as_arg())
         .env("LEPTOS_SITE_ADDR", site_addr)
         .env("LEPTOS_RELOAD_PORT", reload_port.to_string())
+        // These require https://github.com/leptos-rs/cargo-leptos/pull/648 to land.
+        .env(
+            "LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS",
+            graceful_shutdown_timeout.as_secs().to_string(),
+        )
+        .env(
+            "LEPTOS_GRACEFUL_SHUTDOWN_UNIX_SIGNAL",
+            match graceful_shutdown_unix_signal {
+                UnixGracefulSignal::Interrupt => "SIGINT",
+                UnixGracefulSignal::Terminate => "SIGTERM",
+                _ => unreachable!(
+                    "tokio-process-tools added a new UnixGracefulSignal variant. \
+                     Extend this match to map it to the signal label expected by cargo-leptos."
+                ),
+            },
+        )
         .current_dir(app_dir);
 
     if env::var_os("RUST_BACKTRACE").is_none() {
@@ -66,11 +86,11 @@ pub(crate) fn cargo_program(cmd: &Command) -> &OsStr {
 
 #[cfg(test)]
 mod tests {
-    use std::{ffi::OsStr, path::Path};
-
-    use assertr::prelude::*;
-
     use super::{CargoLeptosMode, cargo_program, command};
+    use assertr::prelude::*;
+    use std::time::Duration;
+    use std::{ffi::OsStr, path::Path};
+    use tokio_process_tools::UnixGracefulSignal;
 
     fn env_pairs(cmd: &tokio::process::Command) -> Vec<(String, Option<String>)> {
         cmd.as_std()
@@ -102,6 +122,8 @@ mod tests {
             Path::new("."),
             "127.0.0.1:3000",
             3001,
+            Duration::from_secs(10),
+            UnixGracefulSignal::Interrupt,
             &[],
         );
         assert_that!(cargo_program(&cmd)).is_equal_to(expected.as_os_str());
@@ -115,6 +137,8 @@ mod tests {
             Path::new("."),
             "127.0.0.1:3000",
             3001,
+            Duration::from_secs(10),
+            UnixGracefulSignal::Interrupt,
             &[],
         );
         assert_that!(cargo_program(&cmd)).is_equal_to(OsStr::new("/usr/local/bin/my-cargo"));
@@ -128,6 +152,8 @@ mod tests {
             Path::new("."),
             "127.0.0.1:3000",
             3001,
+            Duration::from_secs(10),
+            UnixGracefulSignal::Interrupt,
             &[],
         );
         assert_that!(args(&serve)).is_equal_to(vec!["leptos".to_owned(), "serve".to_owned()]);
@@ -138,6 +164,8 @@ mod tests {
             Path::new("."),
             "127.0.0.1:3000",
             3001,
+            Duration::from_secs(10),
+            UnixGracefulSignal::Interrupt,
             &[],
         );
         assert_that!(args(&watch)).is_equal_to(vec!["leptos".to_owned(), "watch".to_owned()]);
@@ -151,39 +179,43 @@ mod tests {
             Path::new("."),
             "127.0.0.1:3000",
             3001,
+            Duration::from_secs(10),
+            UnixGracefulSignal::Interrupt,
             &[],
         );
         let envs = env_pairs(&cmd);
-        assert_that!(
-            envs.iter()
-                .any(|(k, v)| k == "LEPTOS_SITE_ADDR" && v.as_deref() == Some("127.0.0.1:3000"))
-        )
-        .is_true();
-        assert_that!(
-            envs.iter()
-                .any(|(k, v)| k == "LEPTOS_RELOAD_PORT" && v.as_deref() == Some("3001"))
-        )
-        .is_true();
+        assert_that!(&envs).contains((
+            "LEPTOS_SITE_ADDR".to_string(),
+            Some("127.0.0.1:3000".to_string()),
+        ));
+        assert_that!(&envs).contains(("LEPTOS_RELOAD_PORT".to_string(), Some("3001".to_string())));
+        assert_that!(&envs).contains((
+            "LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS".to_string(),
+            Some("10".to_string()),
+        ));
+        assert_that!(&envs).contains((
+            "LEPTOS_GRACEFUL_SHUTDOWN_UNIX_SIGNAL".to_string(),
+            Some("SIGINT".to_string()),
+        ));
     }
 
     #[test]
     fn extra_env_overrides_framework_env() {
-        let extras = [("LEPTOS_SITE_ADDR".into(), "127.0.0.1:9999".into())];
         let cmd = command(
             CargoLeptosMode::Serve,
             None,
             Path::new("."),
             "127.0.0.1:3000",
             3001,
-            &extras,
+            Duration::from_secs(10),
+            UnixGracefulSignal::Interrupt,
+            &[("LEPTOS_SITE_ADDR".into(), "127.0.0.1:9999".into())],
         );
-        // tokio::process::Command::env is last-write-wins; both entries are tracked but the
-        // child sees the last one. We assert at least the override is present.
         let envs = env_pairs(&cmd);
-        let overrides: Vec<_> = envs
+        let overrides = envs
             .iter()
             .filter(|(k, _)| k == "LEPTOS_SITE_ADDR")
-            .collect();
+            .collect::<Vec<_>>();
         assert_that!(overrides.last().and_then(|(_, v)| v.as_deref()))
             .is_equal_to(Some("127.0.0.1:9999"));
     }

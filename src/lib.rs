@@ -14,5 +14,7 @@ pub use config::LeptosTestAppConfig;
 pub use error::LeptosBrowserTestError;
 pub use site::SiteScheme;
 
+pub use tokio_process_tools::UnixGracefulSignal;
+
 pub use rootcause::prelude::ResultExt;
 pub use rootcause::{Report, bail, report};

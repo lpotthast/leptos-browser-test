@@ -1,6 +1,6 @@
 [package]
 name = "leptos-browser-test"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.89.0"
 authors = ["Lukas Potthast <privat@lukas-potthast.de>"]
@@ -25,14 +25,15 @@ exclude = [
 [dependencies]
 rootcause = { version = "0.12.1", default-features = false }
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", default-features = false, features = ["process", "rt", "time"] }
-tokio-process-tools = { version = "0.9.0", default-features = false, features = [] }
+tokio = { version = "1.50.0", default-features = false, features = ["process", "rt", "time", "io-std"] }
+tokio-process-tools = { version = "0.11.2", default-features = false, features = [] }
 tracing = "0.1.44"
+unwrap-infallible = "1.0.0"
 
 [dev-dependencies]
-assertr = "0.5.7"
+assertr = "0.6.0"
 reqwest = { version = "0.13.3", default-features = false, features = ["rustls"] }
-tokio = { version = "1.50.0", features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
+tokio = { version = "1.52.3", features = ["macros", "process", "rt", "rt-multi-thread", "time"] }
 
 [lints.rust]
 missing_docs = "warn"

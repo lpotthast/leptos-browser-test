@@ -11,6 +11,8 @@ install-tools:
   cargo +stable install --locked cargo-whatfeatures
   cargo +stable install --locked cargo-upgrades
   cargo +stable install --locked cargo-edit
+  cargo +stable install --locked wasm-bindgen-cli
+  cargo +stable install --locked --git https://github.com/lpotthast/cargo-leptos --branch graceful-shutdown-v2 cargo-leptos
 
 # Find the minimum supported rust version
 msrv:
@@ -29,8 +31,14 @@ fmt-check:
 lint:
     cargo clippy --all-targets --all-features -- -D warnings
 
-test:
-    cargo test
+test-unit:
+    cargo test --lib -- --nocapture
+
+# Run sequentially to avoid race-errors.
+test-smoke:
+    cargo test --test smoke -- --test-threads=1 --nocapture
+
+test: test-unit test-smoke
 
 build:
     cargo build

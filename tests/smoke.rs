@@ -14,12 +14,11 @@
 //! Subsequent runs reuse the fixture's `target/` cache and are much faster. The startup
 //! timeout used in tests below is generous accordingly.
 
+use leptos_browser_test::{LeptosTestAppConfig, UnixGracefulSignal};
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-
-use leptos_browser_test::LeptosTestAppConfig;
 
 /// Absolute path to the SSR fixture directory.
 fn fixture_path() -> PathBuf {
@@ -41,7 +40,7 @@ async fn http_get(url: &str) -> Result<String, reqwest::Error> {
 async fn starts_real_leptos_app_and_serves_http() {
     let app = LeptosTestAppConfig::new(fixture_path())
         .with_app_name("leptos-ssr-app")
-        .with_forward_logs(false)
+        .with_forward_logs(true)
         .with_startup_timeout(
             Duration::from_secs(600),
             "Cold builds of the Leptos fixture (server + wasm) can take several minutes.",
@@ -72,16 +71,13 @@ async fn starts_real_leptos_app_and_serves_http() {
 async fn http_request_fails_after_drop() {
     let app = LeptosTestAppConfig::new(fixture_path())
         .with_app_name("leptos-ssr-app")
-        .with_forward_logs(false)
         .with_startup_timeout(
             Duration::from_secs(600),
             "Cold builds of the Leptos fixture (server + wasm) can take several minutes.",
         )
-        .with_termination_timeouts(
-            Duration::from_millis(500),
-            Duration::from_secs(3),
-            "Tighten the post-drop kill chain so the test isn't slow on success.",
-        )
+        .with_forward_logs(true)
+        .with_graceful_shutdown_timeout(Duration::from_millis(500))
+        .with_graceful_shutdown_unix_signal(UnixGracefulSignal::Terminate)
         .start()
         .await
         .expect("start");
@@ -114,7 +110,7 @@ async fn surfaces_startup_timeout_with_log_tail() {
     let reason = "Tight bound that cargo-leptos cannot meet, used to exercise the timeout path.";
     let result = LeptosTestAppConfig::new(fixture_path())
         .with_app_name("leptos-ssr-app")
-        .with_forward_logs(false)
+        .with_forward_logs(true)
         .with_startup_timeout(Duration::from_millis(250), reason)
         .start()
         .await;
