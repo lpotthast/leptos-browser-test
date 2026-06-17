@@ -22,13 +22,32 @@ async fn main() {
         .fallback(leptos_axum::file_and_error_handler(shell))
         .with_state(leptos_options);
 
-    // run our app with hyper
-    // `axum::Server` is a re-export of `hyper::Server`
-    log!("listening on http://{}", &addr);
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    log!("listening on http://{}", &addr);
     axum::serve(listener, app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .unwrap();
+}
+
+#[cfg(all(feature = "ssr", unix))]
+async fn shutdown_signal() {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    let mut interrupt = signal(SignalKind::interrupt()).expect("install SIGINT handler");
+    let mut terminate = signal(SignalKind::terminate()).expect("install SIGTERM handler");
+
+    tokio::select! {
+        _ = interrupt.recv() => {}
+        _ = terminate.recv() => {}
+    }
+}
+
+#[cfg(all(feature = "ssr", not(unix)))]
+async fn shutdown_signal() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("install Ctrl-C handler");
 }
 
 #[cfg(not(feature = "ssr"))]

@@ -12,7 +12,8 @@ use tokio::io::AsyncWrite;
 use tokio_process_tools::{
     AutoName, BroadcastOutputStream, Consumable, Consumer, DEFAULT_MAX_BUFFERED_CHUNKS,
     DEFAULT_READ_CHUNK_SIZE, GracefulShutdown, LineParsingOptions, Next, NumBytesExt, ParseLines,
-    Process, ReliableWithBackpressure, ReplayEnabled, TerminateOnDrop, WaitForLineResult,
+    Process, ReliableWithBackpressure, ReplayEnabled, StreamReadError, TerminateOnDrop,
+    WaitForLineResult,
 };
 use unwrap_infallible::UnwrapInfallible;
 
@@ -324,12 +325,7 @@ async fn wait_for_ready(
         config.app_name,
     );
 
-    let expected_line = runtime.startup_line.clone();
-    let startup_waiter = spawned.process.stdout().wait_for_line(
-        config.startup_timeout,
-        move |line| line.contains(&expected_line),
-        LineParsingOptions::default(),
-    );
+    let startup_waiter = wait_for_startup_line(spawned, runtime, config);
     spawned.process.seal_output_replay();
 
     match startup_waiter.await {
@@ -350,13 +346,73 @@ async fn wait_for_ready(
                 reason: config.startup_timeout_reason.clone(),
             });
         }
-        Err(err) => Err(err
-            .into_report()
-            .context(LeptosBrowserTestError::StreamRead(startup_failure_context(
-                &config.app_name,
-                &runtime.startup_line,
-                &spawned.logs,
-            )))),
+        Err(err) => {
+            let err: Report<StreamReadError> = err.into_report();
+            Err(
+                err.context(LeptosBrowserTestError::StreamRead(startup_failure_context(
+                    &config.app_name,
+                    &runtime.startup_line,
+                    &spawned.logs,
+                ))),
+            )
+        }
+    }
+}
+
+async fn wait_for_startup_line(
+    spawned: &SpawnedProcess,
+    runtime: &RuntimeConfig,
+    config: &LeptosTestAppConfig,
+) -> Result<WaitForLineResult, StreamReadError> {
+    let stdout_expected_line = runtime.startup_line.clone();
+    let stdout_waiter = spawned.process.stdout().wait_for_line(
+        config.startup_timeout,
+        move |line| line.contains(&stdout_expected_line),
+        LineParsingOptions::default(),
+    );
+
+    let stderr_expected_line = runtime.startup_line.clone();
+    let stderr_waiter = spawned.process.stderr().wait_for_line(
+        config.startup_timeout,
+        move |line| line.contains(&stderr_expected_line),
+        LineParsingOptions::default(),
+    );
+
+    tokio::pin!(stdout_waiter);
+    tokio::pin!(stderr_waiter);
+
+    let mut stdout_result = None;
+    let mut stderr_result = None;
+
+    loop {
+        tokio::select! {
+            result = &mut stdout_waiter, if stdout_result.is_none() => {
+                stdout_result = Some(result?);
+            }
+            result = &mut stderr_waiter, if stderr_result.is_none() => {
+                stderr_result = Some(result?);
+            }
+        }
+
+        if stdout_result == Some(WaitForLineResult::Matched)
+            || stderr_result == Some(WaitForLineResult::Matched)
+        {
+            return Ok(WaitForLineResult::Matched);
+        }
+
+        match (stdout_result, stderr_result) {
+            (Some(WaitForLineResult::StreamClosed), Some(WaitForLineResult::StreamClosed)) => {
+                return Ok(WaitForLineResult::StreamClosed);
+            }
+            (Some(stdout), Some(stderr)) => {
+                debug_assert!(
+                    matches!(stdout, WaitForLineResult::Timeout)
+                        || matches!(stderr, WaitForLineResult::Timeout)
+                );
+                return Ok(WaitForLineResult::Timeout);
+            }
+            _ => {}
+        }
     }
 }
 

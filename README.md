@@ -20,7 +20,7 @@ Test orchestration is intentionally left to the consumer. Take a look at
 
 ```toml
 [dev-dependencies]
-leptos-browser-test = "0.2.0"
+leptos-browser-test = "0.3.0"
 ```
 
 ### cargo-leptos requirement

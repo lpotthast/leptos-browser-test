@@ -6,7 +6,7 @@ use crate::CargoLeptosMode;
 
 /// Diagnostic context attached to startup-failure variants.
 ///
-/// Carries the descriptive app name, the stdout fragment we were waiting for, and the most
+/// Carries the descriptive app name, the output fragment we were waiting for, and the most
 /// recent stdout/stderr lines captured before the failure was reported. The tails are bounded
 /// by [`LeptosTestAppConfig::with_startup_log_tail_lines`](crate::LeptosTestAppConfig::with_startup_log_tail_lines).
 #[derive(Debug, PartialEq, Eq)]
@@ -56,9 +56,9 @@ pub enum LeptosBrowserTestError {
         app_name: String,
     },
 
-    /// The frontend stdout stream closed before startup completed.
+    /// The frontend stdout and stderr streams closed before startup completed.
     #[error(
-        "{app_name} stdout closed before startup completed. Expected stdout to contain {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
+        "{app_name} output closed before startup completed. Expected stdout or stderr to contain {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
         app_name = .0.app_name,
         expected_line = .0.expected_line,
         stdout_tail = .0.stdout_tail,
@@ -68,7 +68,7 @@ pub enum LeptosBrowserTestError {
 
     /// The frontend did not produce the expected startup line before the timeout.
     #[error(
-        "{app_name} did not start within {timeout:?} ({reason}); expected stdout to contain {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
+        "{app_name} did not start within {timeout:?} ({reason}); expected stdout or stderr to contain {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
         app_name = ctx.app_name,
         expected_line = ctx.expected_line,
         stdout_tail = ctx.stdout_tail,
@@ -84,9 +84,9 @@ pub enum LeptosBrowserTestError {
         reason: String,
     },
 
-    /// Reading the frontend stdout stream failed before the startup line was observed.
+    /// Reading the frontend output streams failed before the startup line was observed.
     #[error(
-        "{app_name} failed to read stdout while waiting for {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
+        "{app_name} failed to read output while waiting for {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
         app_name = .0.app_name,
         expected_line = .0.expected_line,
         stdout_tail = .0.stdout_tail,
@@ -125,7 +125,7 @@ mod tests {
     fn startup_stdout_closed_display_matches_documented_format() {
         let err = LeptosBrowserTestError::StartupStdoutClosed(ctx());
         assert_that!(err.to_string()).is_equal_to(
-            "demo stdout closed before startup completed. Expected stdout to contain \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
+            "demo output closed before startup completed. Expected stdout or stderr to contain \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
                 .to_owned(),
         );
     }
@@ -138,7 +138,7 @@ mod tests {
             reason: "tight bound for unit-style smoke test".to_owned(),
         };
         assert_that!(err.to_string()).is_equal_to(
-            "demo did not start within 7s (tight bound for unit-style smoke test); expected stdout to contain \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
+            "demo did not start within 7s (tight bound for unit-style smoke test); expected stdout or stderr to contain \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
                 .to_owned(),
         );
     }
@@ -147,7 +147,7 @@ mod tests {
     fn stream_read_display_matches_documented_format() {
         let err = LeptosBrowserTestError::StreamRead(ctx());
         assert_that!(err.to_string()).is_equal_to(
-            "demo failed to read stdout while waiting for \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
+            "demo failed to read output while waiting for \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
                 .to_owned(),
         );
     }

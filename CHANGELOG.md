@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-17
+
+### Fixed
+
+- Startup readiness detection now watches both stdout and stderr for the configured `with_startup_line` fragment. With
+  this, leptos-browser-test now also supports leptos-applications who write their readiness lines to stderr.
+
+### Changed
+
+- **Breaking:** Updated `rootcause` to v0.13
+
 ## [0.2.0] - 2026-05-15
 
 > **Upgrade note**: 0.2.0 requires cargo-leptos with
@@ -70,7 +81,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/fixtures/leptos-ssr-app`.
 - GitHub CI covering format, check, clippy, test, build, doc, and an MSRV gate at the declared `rust-version` (1.89.0).
 
-[Unreleased]: https://github.com/lpotthast/leptos-browser-test/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/lpotthast/leptos-browser-test/compare/v0.2.1...HEAD
+
+[0.2.1]: https://github.com/lpotthast/leptos-browser-test/compare/v0.2.0...v0.2.1
 
 [0.2.0]: https://github.com/lpotthast/leptos-browser-test/compare/v0.1.1...v0.2.0
 

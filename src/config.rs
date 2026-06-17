@@ -85,7 +85,7 @@ impl LeptosTestAppConfig {
     /// Set the browser-facing URL scheme used by [`LeptosTestApp::base_url`].
     ///
     /// This does not configure TLS for the Leptos process; it only controls the URL returned to
-    /// browser tests and the default startup line expected in stdout.
+    /// browser tests and the default startup line expected in stdout or stderr.
     #[must_use]
     pub const fn with_site_scheme(mut self, site_scheme: SiteScheme) -> Self {
         self.site_scheme = site_scheme;
@@ -110,7 +110,7 @@ impl LeptosTestAppConfig {
         self
     }
 
-    /// Override the stdout line fragment that marks the app as ready.
+    /// Override the stdout/stderr line fragment that marks the app as ready.
     #[must_use]
     pub fn with_startup_line(mut self, startup_line: impl Into<String>) -> Self {
         self.startup_line = Some(startup_line.into());
