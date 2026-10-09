@@ -1,5 +1,11 @@
 # leptos-browser-test
 
+[![Crates.io](https://img.shields.io/crates/v/leptos-browser-test.svg)](https://crates.io/crates/leptos-browser-test)
+[![Docs.rs](https://docs.rs/leptos-browser-test/badge.svg)](https://docs.rs/leptos-browser-test)
+[![CI](https://github.com/lpotthast/leptos-browser-test/actions/workflows/ci.yml/badge.svg)](https://github.com/lpotthast/leptos-browser-test/actions/workflows/ci.yml)
+[![MSRV](https://img.shields.io/badge/MSRV-1.89.0-blue.svg)](https://github.com/lpotthast/leptos-browser-test/blob/main/Cargo.toml)
+[![License: MIT OR Apache-2.0](https://img.shields.io/crates/l/leptos-browser-test.svg)](#license)
+
 Leptos test-app launcher for browser-driven integration tests.
 
 This crate owns the `cargo leptos serve` / `cargo leptos watch` process management for a local Leptos test app:
