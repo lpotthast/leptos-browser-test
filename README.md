@@ -135,6 +135,44 @@ async fn example() -> Result<(), leptos_browser_test::Report> {
 `SiteScheme` only affects the `base_url()` returned to your harness. Configuring TLS on the served app itself is the
 app's responsibility.
 
+### Build profile
+
+Every browser test that loads a page downloads, compiles and runs the app's WASM bundle, often in a fresh browser
+context with a cold cache. A dev build's bundle can be tens or hundreds of megabytes of unoptimized code. Build with
+`--release` to make pages load and hydration faster. This can also reduce browser memory consumption. With the right
+profile settings, this might not even cost you (incremental) compile times.
+
+```rust,no_run
+use leptos_browser_test::{BuildProfile, LeptosTestAppConfig};
+
+let app = LeptosTestAppConfig::new("testing/test-app").with_build_profile(BuildProfile::Release);
+```
+
+The app's `Cargo.toml` decides what a release build means (`[package.metadata.leptos]`): e.g. an optimized
+`lib-profile-release` for the WASM, and a `bin-profile-release` inheriting `dev` so that the server still builds
+quickly.
+
+These are recommended settings that give very small WASM binary sizes and slightly optimized server-side-rendering
+performance with little to none compile-time reduction drawbacks.
+
+```toml
+[package.metadata.leptos]
+lib-profile-release = "wasm-release"
+bin-profile-release = "server-release"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+incremental = true
+debug-assertions = true
+overflow-checks = true
+
+[profile.server-release]
+inherits = "dev"
+opt-level = 1
+```
+
+
 ### Tuning graceful shutdown
 
 By default, the managed Leptos app gets 10 seconds to shut down on drop and is signalled with `SIGINT` on Unix (always

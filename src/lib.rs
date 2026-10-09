@@ -9,7 +9,7 @@ mod site;
 mod startup;
 
 pub use app::LeptosTestApp;
-pub use cargo_leptos::CargoLeptosMode;
+pub use cargo_leptos::{BuildProfile, CargoLeptosMode};
 pub use config::LeptosTestAppConfig;
 pub use error::LeptosBrowserTestError;
 pub use site::SiteScheme;

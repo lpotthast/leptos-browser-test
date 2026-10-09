@@ -11,6 +11,10 @@ use tokio_process_tools::UnixGracefulSignal;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CargoLeptosMode {
     /// Run `cargo leptos serve`.
+    ///
+    /// Prefer this over `Watch`. The watch option is only here for completeness in cases anyone
+    /// wants/needs this. You typically do NOT want changes to the underlying app code to affect
+    /// your tests in any way, so pick `Serve`.
     Serve,
 
     /// Run `cargo leptos watch`.
@@ -26,6 +30,25 @@ impl CargoLeptosMode {
     }
 }
 
+/// The build profile `cargo leptos` builds the app with.
+///
+/// The app's `Cargo.toml` decides what each profile means for its server and WASM builds.
+/// Set `[package.metadata.leptos]`: `bin-profile-dev`/`lib-profile-dev` and
+/// `bin-profile-release`/`lib-profile-release` to be explicit about the profiles used. Note that
+/// you can configure a custom "wasm-release" profile for example.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BuildProfile {
+    /// Build without `--release`. The default.
+    #[default]
+    Dev,
+
+    /// Build with `--release` optimizations. This can lead to a much smaller and faster WASM
+    /// bundle. Note that every browser test that loads a page (when no caching is active)
+    /// downloads, compiles and runs it. The Leptos server will also SSR-render pages notably
+    /// faster.
+    Release,
+}
+
 fn resolve_cargo_bin(cargo_bin: Option<&OsStr>) -> OsString {
     cargo_bin
         .map(OsStr::to_owned)
@@ -36,6 +59,7 @@ fn resolve_cargo_bin(cargo_bin: Option<&OsStr>) -> OsString {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn command(
     mode: CargoLeptosMode,
+    build_profile: BuildProfile,
     cargo_bin: Option<&OsStr>,
     app_dir: &Path,
     site_addr: &str,
@@ -46,11 +70,12 @@ pub(crate) fn command(
 ) -> Command {
     let cargo = resolve_cargo_bin(cargo_bin);
     let mut cmd = Command::new(&cargo);
-    cmd.arg("leptos")
-        .arg(mode.as_arg())
-        .env("LEPTOS_SITE_ADDR", site_addr)
+    cmd.arg("leptos").arg(mode.as_arg());
+    if build_profile == BuildProfile::Release {
+        cmd.arg("--release");
+    }
+    cmd.env("LEPTOS_SITE_ADDR", site_addr)
         .env("LEPTOS_RELOAD_PORT", reload_port.to_string())
-        // These require https://github.com/leptos-rs/cargo-leptos/pull/648 to land.
         .env(
             "LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS",
             graceful_shutdown_timeout.as_secs().to_string(),
@@ -86,7 +111,7 @@ pub(crate) fn cargo_program(cmd: &Command) -> &OsStr {
 
 #[cfg(test)]
 mod tests {
-    use super::{CargoLeptosMode, cargo_program, command};
+    use super::{BuildProfile, CargoLeptosMode, cargo_program, command};
     use assertr::prelude::*;
     use std::time::Duration;
     use std::{ffi::OsStr, path::Path};
@@ -118,6 +143,7 @@ mod tests {
             std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo"));
         let cmd = command(
             CargoLeptosMode::Serve,
+            BuildProfile::Dev,
             None,
             Path::new("."),
             "127.0.0.1:3000",
@@ -133,6 +159,7 @@ mod tests {
     fn with_cargo_overrides_program() {
         let cmd = command(
             CargoLeptosMode::Watch,
+            BuildProfile::Dev,
             Some(OsStr::new("/usr/local/bin/my-cargo")),
             Path::new("."),
             "127.0.0.1:3000",
@@ -148,6 +175,7 @@ mod tests {
     fn passes_mode_arg() {
         let serve = command(
             CargoLeptosMode::Serve,
+            BuildProfile::Dev,
             None,
             Path::new("."),
             "127.0.0.1:3000",
@@ -160,6 +188,7 @@ mod tests {
 
         let watch = command(
             CargoLeptosMode::Watch,
+            BuildProfile::Dev,
             None,
             Path::new("."),
             "127.0.0.1:3000",
@@ -172,9 +201,30 @@ mod tests {
     }
 
     #[test]
+    fn release_profile_passes_release_flag() {
+        let cmd = command(
+            CargoLeptosMode::Serve,
+            BuildProfile::Release,
+            None,
+            Path::new("."),
+            "127.0.0.1:3000",
+            3001,
+            Duration::from_secs(10),
+            UnixGracefulSignal::Interrupt,
+            &[],
+        );
+        assert_that!(args(&cmd)).is_equal_to(vec![
+            "leptos".to_owned(),
+            "serve".to_owned(),
+            "--release".to_owned(),
+        ]);
+    }
+
+    #[test]
     fn sets_framework_env_vars() {
         let cmd = command(
             CargoLeptosMode::Serve,
+            BuildProfile::Dev,
             None,
             Path::new("."),
             "127.0.0.1:3000",
@@ -203,6 +253,7 @@ mod tests {
     fn extra_env_overrides_framework_env() {
         let cmd = command(
             CargoLeptosMode::Serve,
+            BuildProfile::Dev,
             None,
             Path::new("."),
             "127.0.0.1:3000",

@@ -225,6 +225,7 @@ fn spawn_with_log_capture(
 
     let cmd = cargo_leptos::command(
         config.mode,
+        config.build_profile,
         config.cargo_bin.as_deref(),
         &runtime.app_dir,
         &runtime.site_addr,

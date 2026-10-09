@@ -1,4 +1,6 @@
-use crate::{CargoLeptosMode, LeptosBrowserTestError, SiteScheme, app::LeptosTestApp};
+use crate::{
+    BuildProfile, CargoLeptosMode, LeptosBrowserTestError, SiteScheme, app::LeptosTestApp,
+};
 use rootcause::Report;
 use std::{
     ffi::{OsStr, OsString},
@@ -20,6 +22,7 @@ pub struct LeptosTestAppConfig {
     pub(crate) app_dir: PathBuf,
     pub(crate) app_name: String,
     pub(crate) mode: CargoLeptosMode,
+    pub(crate) build_profile: BuildProfile,
     pub(crate) cargo_bin: Option<OsString>,
     pub(crate) site_scheme: SiteScheme,
     pub(crate) site_addr: Option<String>,
@@ -42,6 +45,7 @@ impl LeptosTestAppConfig {
             app_dir: app_dir.into(),
             app_name: "Leptos test app".to_owned(),
             mode: CargoLeptosMode::Serve,
+            build_profile: BuildProfile::Dev,
             cargo_bin: None,
             site_scheme: SiteScheme::Http,
             site_addr: None,
@@ -68,6 +72,20 @@ impl LeptosTestAppConfig {
     #[must_use]
     pub const fn with_mode(mut self, mode: CargoLeptosMode) -> Self {
         self.mode = mode;
+        self
+    }
+
+    /// Select the build profile: [`BuildProfile::Release`] passes `--release` to `cargo leptos`.
+    ///
+    /// Defaults to [`BuildProfile::Dev`]. A release build makes the WASM bundle much smaller and
+    /// faster, so pages load and hydrate faster in every browser test, at the cost of longer
+    /// builds. The app's `Cargo.toml` decides which cargo profiles a release build uses (e.g. an
+    /// optimized `lib-profile-release` for the WASM and a quick-to-build `bin-profile-release` for
+    /// the server). Experiment with optimization values until you find values that keep
+    /// (incremental) compile times low and WASM binary size as small as possible.
+    #[must_use]
+    pub const fn with_build_profile(mut self, build_profile: BuildProfile) -> Self {
+        self.build_profile = build_profile;
         self
     }
 
@@ -217,7 +235,7 @@ mod tests {
         DEFAULT_STARTUP_LOG_TAIL_LINES, DEFAULT_STARTUP_TIMEOUT, DEFAULT_STARTUP_TIMEOUT_REASON,
         LeptosTestAppConfig,
     };
-    use crate::{CargoLeptosMode, SiteScheme};
+    use crate::{BuildProfile, CargoLeptosMode, SiteScheme};
     use assertr::prelude::*;
     use tokio_process_tools::UnixGracefulSignal;
 
@@ -227,6 +245,7 @@ mod tests {
 
         assert_that!(config.app_name).is_equal_to("Leptos test app");
         assert_that!(config.mode).is_equal_to(CargoLeptosMode::Serve);
+        assert_that!(config.build_profile).is_equal_to(BuildProfile::Dev);
         assert_that!(config.cargo_bin).is_equal_to(None);
         assert_that!(config.site_scheme).is_equal_to(SiteScheme::Http);
         assert_that!(config.site_addr).is_equal_to(None);
@@ -248,6 +267,7 @@ mod tests {
         let config = LeptosTestAppConfig::new("./test-app")
             .with_app_name("custom")
             .with_mode(CargoLeptosMode::Watch)
+            .with_build_profile(BuildProfile::Release)
             .with_cargo("/opt/cargo")
             .with_site_scheme(SiteScheme::Https)
             .with_site_addr("127.0.0.1:4000")
@@ -265,6 +285,7 @@ mod tests {
 
         assert_that!(config.app_name).is_equal_to("custom");
         assert_that!(config.mode).is_equal_to(CargoLeptosMode::Watch);
+        assert_that!(config.build_profile).is_equal_to(BuildProfile::Release);
         assert_that!(config.cargo_bin).is_equal_to(Some(std::ffi::OsString::from("/opt/cargo")));
         assert_that!(config.site_scheme).is_equal_to(SiteScheme::Https);
         assert_that!(config.site_addr).is_equal_to(Some("127.0.0.1:4000".to_owned()));

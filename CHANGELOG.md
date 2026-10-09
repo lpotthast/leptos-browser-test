@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-09
+
+### Added
+
+- `LeptosTestAppConfig::with_build_profile(BuildProfile::Release)` builds the app with `cargo leptos serve --release`
+  (or `watch --release`). Defaults to `BuildProfile::Dev`. See the README's "Build profile".
+- `LeptosTestApp` now implements `Debug`, showing its base URL, site address, reload port, and app directory.
+
 ## [0.3.0] - 2026-06-17
 
 ### Fixed
