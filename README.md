@@ -200,3 +200,9 @@ stdout/stderr stays visible:
 ```sh
 cargo test --test your_integration_test -- --nocapture
 ```
+
+## License
+
+Licensed under either [Apache License, Version 2.0](https://github.com/lpotthast/leptos-browser-test/blob/main/LICENSE-APACHE)
+or [MIT license](https://github.com/lpotthast/leptos-browser-test/blob/main/LICENSE-MIT),
+at your option.
