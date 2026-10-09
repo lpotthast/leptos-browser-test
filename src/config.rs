@@ -168,7 +168,7 @@ impl LeptosTestAppConfig {
     ///
     /// An additional ~10s of slack is given to `cargo leptos` itself to shut down gracefully.
     #[must_use]
-    pub fn with_graceful_shutdown_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_graceful_shutdown_timeout(mut self, timeout: Duration) -> Self {
         self.graceful_shutdown_timeout = timeout;
         self
     }
@@ -182,7 +182,7 @@ impl LeptosTestAppConfig {
     /// `tokio::signal::ctrl_c()` flow typical tokio-driven apps install. Use
     /// [`UnixGracefulSignal::Terminate`] (SIGTERM) for service-style children that handle SIGTERM.
     #[must_use]
-    pub fn with_graceful_shutdown_unix_signal(mut self, signal: UnixGracefulSignal) -> Self {
+    pub const fn with_graceful_shutdown_unix_signal(mut self, signal: UnixGracefulSignal) -> Self {
         self.graceful_shutdown_unix_signal = signal;
         self
     }
