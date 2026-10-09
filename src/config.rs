@@ -161,8 +161,8 @@ impl LeptosTestAppConfig {
     ///
     /// Forwarded to `cargo leptos` through the `LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS` environment
     /// variable. Bounds how long cargo-leptos waits for the application to finish. The `_SECS`
-    /// env-var protocol means resolution is whole seconds. Sub-second values are truncated by
-    /// [`Duration::as_secs`].
+    /// env-var protocol means resolution is whole seconds. Sub-second values are rounded up to the
+    /// next whole second, so a non-zero timeout never turns into no grace period at all.
     ///
     /// Defaults to 10 seconds.
     ///
