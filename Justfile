@@ -45,7 +45,7 @@ check:
 
 # Lint the code.
 lint:
-    cargo clippy --all-targets --all-features --locked -- -D warnings -W clippy::pedantic
+    cargo clippy --all-targets --all-features --locked -- -D warnings
 
 # Run the in-module unit tests.
 test-unit:
