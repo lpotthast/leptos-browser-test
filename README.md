@@ -26,18 +26,7 @@ Test orchestration is intentionally left to the consumer. Take a look at
 
 ```toml
 [dev-dependencies]
-leptos-browser-test = "0.3.0"
-```
-
-### cargo-leptos requirement
-
-`leptos-browser-test` v0.2.0 sets `LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS` and `LEPTOS_GRACEFUL_SHUTDOWN_UNIX_SIGNAL` on
-the managed cargo-leptos child to drive the Leptos app's graceful-shutdown path on drop. These env vars require
-[cargo-leptos PR #648](https://github.com/leptos-rs/cargo-leptos/pull/648), which has not yet shipped. Until it lands
-upstream, install cargo-leptos from here:
-
-```sh
-cargo install --locked --git https://github.com/lpotthast/cargo-leptos --branch graceful-shutdown-v2 cargo-leptos
+leptos-browser-test = "0.3.1"
 ```
 
 ## Runtime requirements
