@@ -72,7 +72,7 @@ the test harness's own error type.
 Start the app, pass its base URL into the runner context, and let drop-based cleanup handle the app process after
 `BrowserTestRunner::run(...)` returns:
 
-```rust,no_run
+```rust,ignore
 use browser_test::{BrowserTestRunner, BrowserTests};
 use leptos_browser_test::{LeptosTestAppConfig, Report};
 
