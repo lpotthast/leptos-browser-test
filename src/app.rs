@@ -370,11 +370,16 @@ async fn wait_for_ready(
     }
 }
 
-async fn wait_for_startup_line(
+/// Subscribes to stdout and stderr immediately and returns a future racing both for the startup
+/// line.
+///
+/// Deliberately not an `async fn`: the subscriptions must exist before the caller seals the
+/// output replay, but an `async fn` body would only run (and subscribe) on first poll.
+fn wait_for_startup_line(
     spawned: &SpawnedProcess,
     runtime: &RuntimeConfig,
     config: &LeptosTestAppConfig,
-) -> Result<WaitForLineResult, StreamReadError> {
+) -> impl Future<Output = Result<WaitForLineResult, StreamReadError>> {
     let stdout_expected_line = runtime.startup_line.clone();
     let stdout_waiter = spawned.process.stdout().wait_for_line(
         config.startup_timeout,
@@ -389,40 +394,42 @@ async fn wait_for_startup_line(
         LineParsingOptions::default(),
     );
 
-    tokio::pin!(stdout_waiter);
-    tokio::pin!(stderr_waiter);
+    async move {
+        tokio::pin!(stdout_waiter);
+        tokio::pin!(stderr_waiter);
 
-    let mut stdout_result = None;
-    let mut stderr_result = None;
+        let mut stdout_result = None;
+        let mut stderr_result = None;
 
-    loop {
-        tokio::select! {
-            result = &mut stdout_waiter, if stdout_result.is_none() => {
-                stdout_result = Some(result?);
+        loop {
+            tokio::select! {
+                result = &mut stdout_waiter, if stdout_result.is_none() => {
+                    stdout_result = Some(result?);
+                }
+                result = &mut stderr_waiter, if stderr_result.is_none() => {
+                    stderr_result = Some(result?);
+                }
             }
-            result = &mut stderr_waiter, if stderr_result.is_none() => {
-                stderr_result = Some(result?);
-            }
-        }
 
-        if stdout_result == Some(WaitForLineResult::Matched)
-            || stderr_result == Some(WaitForLineResult::Matched)
-        {
-            return Ok(WaitForLineResult::Matched);
-        }
+            if stdout_result == Some(WaitForLineResult::Matched)
+                || stderr_result == Some(WaitForLineResult::Matched)
+            {
+                return Ok(WaitForLineResult::Matched);
+            }
 
-        match (stdout_result, stderr_result) {
-            (Some(WaitForLineResult::StreamClosed), Some(WaitForLineResult::StreamClosed)) => {
-                return Ok(WaitForLineResult::StreamClosed);
+            match (stdout_result, stderr_result) {
+                (Some(WaitForLineResult::StreamClosed), Some(WaitForLineResult::StreamClosed)) => {
+                    return Ok(WaitForLineResult::StreamClosed);
+                }
+                (Some(stdout), Some(stderr)) => {
+                    debug_assert!(
+                        matches!(stdout, WaitForLineResult::Timeout)
+                            || matches!(stderr, WaitForLineResult::Timeout)
+                    );
+                    return Ok(WaitForLineResult::Timeout);
+                }
+                _ => {}
             }
-            (Some(stdout), Some(stderr)) => {
-                debug_assert!(
-                    matches!(stdout, WaitForLineResult::Timeout)
-                        || matches!(stderr, WaitForLineResult::Timeout)
-                );
-                return Ok(WaitForLineResult::Timeout);
-            }
-            _ => {}
         }
     }
 }
