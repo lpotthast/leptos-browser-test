@@ -56,6 +56,16 @@ fn resolve_cargo_bin(cargo_bin: Option<&OsStr>) -> OsString {
         .unwrap_or_else(|| OsString::from("cargo"))
 }
 
+/// Rounds up to whole seconds, so a non-zero timeout never becomes `0` (no grace period at all).
+fn whole_secs_rounded_up(duration: Duration) -> u64 {
+    let secs = duration.as_secs();
+    if duration.subsec_nanos() == 0 {
+        secs
+    } else {
+        secs.saturating_add(1)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn command(
     mode: CargoLeptosMode,
@@ -78,7 +88,7 @@ pub(crate) fn command(
         .env("LEPTOS_RELOAD_PORT", reload_port.to_string())
         .env(
             "LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS",
-            graceful_shutdown_timeout.as_secs().to_string(),
+            whole_secs_rounded_up(graceful_shutdown_timeout).to_string(),
         )
         .env(
             "LEPTOS_GRACEFUL_SHUTDOWN_UNIX_SIGNAL",
@@ -111,7 +121,7 @@ pub(crate) fn cargo_program(cmd: &Command) -> &OsStr {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildProfile, CargoLeptosMode, cargo_program, command};
+    use super::{BuildProfile, CargoLeptosMode, cargo_program, command, whole_secs_rounded_up};
     use assertr::prelude::*;
     use std::time::Duration;
     use std::{ffi::OsStr, path::Path};
@@ -247,6 +257,16 @@ mod tests {
             "LEPTOS_GRACEFUL_SHUTDOWN_UNIX_SIGNAL".to_string(),
             Some("SIGINT".to_string()),
         ));
+    }
+
+    #[test]
+    fn graceful_shutdown_timeout_rounds_up_to_whole_seconds() {
+        assert_that!(whole_secs_rounded_up(Duration::ZERO)).is_equal_to(0);
+        assert_that!(whole_secs_rounded_up(Duration::from_millis(1))).is_equal_to(1);
+        assert_that!(whole_secs_rounded_up(Duration::from_millis(500))).is_equal_to(1);
+        assert_that!(whole_secs_rounded_up(Duration::from_secs(2))).is_equal_to(2);
+        assert_that!(whole_secs_rounded_up(Duration::from_millis(2001))).is_equal_to(3);
+        assert_that!(whole_secs_rounded_up(Duration::MAX)).is_equal_to(u64::MAX);
     }
 
     #[test]

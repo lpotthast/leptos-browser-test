@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (or `watch --release`). Defaults to `BuildProfile::Dev`. See the README's "Build profile".
 - `LeptosTestApp` now implements `Debug`, showing its base URL, site address, reload port, and app directory.
 
+### Fixed
+
+- Sub-second `with_graceful_shutdown_timeout` values are rounded up to the next whole second instead of truncated, so
+  e.g. 500ms no longer becomes a 0s grace period.
+
 ## [0.3.0] - 2026-06-17
 
 ### Fixed
