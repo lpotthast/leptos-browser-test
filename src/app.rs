@@ -69,6 +69,17 @@ impl LeptosTestApp {
     }
 }
 
+impl std::fmt::Debug for LeptosTestApp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LeptosTestApp")
+            .field("base_url", &self.base_url)
+            .field("site_addr", &self.site_addr)
+            .field("reload_port", &self.reload_port)
+            .field("app_dir", &self.app_dir)
+            .finish_non_exhaustive()
+    }
+}
+
 /// Resolved view of a `LeptosTestAppConfig` after path canonicalization, port allocation,
 /// and startup-line/base-URL derivation. Recomputed for each spawn attempt.
 struct RuntimeConfig {
