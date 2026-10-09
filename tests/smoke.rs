@@ -59,6 +59,10 @@ async fn starts_real_leptos_app_and_serves_http() {
     assert_that!(app.reload_port()).is_greater_than(0_u16);
     assert_that!(app.app_dir().is_absolute()).is_true();
 
+    let debug = format!("{app:?}");
+    assert_that!(debug.as_str()).starts_with("LeptosTestApp {");
+    assert_that!(debug.as_str()).contains(app.base_url());
+
     let body = http_get(&format!("{}/", app.base_url()))
         .await
         .expect("homepage should respond with 200");
@@ -122,13 +126,9 @@ async fn surfaces_startup_timeout_with_log_tail() {
         .start()
         .await;
 
-    let err = assert_that!(result)
+    let err = assert_that_owned!(result)
         .with_detail_message("250ms startup_timeout should not be enough to compile cargo-leptos")
-        .with_debug_format(|result, f| match result {
-            Ok(_) => f.write_str("Ok(<LeptosTestApp>)"),
-            Err(_) => f.write_str("Err(<Report<LeptosBrowserTestError>>)"),
-        })
-        .is_err()
+        .get_err()
         .unwrap_inner();
     let display = err.current_context().to_string();
     assert_that!(display.as_str())
