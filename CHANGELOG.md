@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Sub-second `with_graceful_shutdown_timeout` values are rounded up to the next whole second instead of truncated, so
   e.g. 500ms no longer becomes a 0s grace period.
+- Port-collision retries are detected from the live output instead of the captured log tail. A collision now aborts
+  the attempt immediately, rather than after the full startup timeout in `watch` mode, and is still detected with
+  `with_startup_log_tail_lines(0)`. Reload-port collisions reported by cargo-leptos (`Reload TCP port … already in use`)
+  are now retried too.
+- Only collisions on an auto-allocated port are retried. A pinned `site_addr` is no longer retried just because
+  `reload_port` was left unpinned (and vice versa).
+- Startup now makes up to three retries after the first attempt, as documented, instead of three attempts in total.
 
 ## [0.3.0] - 2026-06-17
 

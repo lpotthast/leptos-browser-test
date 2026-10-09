@@ -88,9 +88,13 @@ plus `rootcause`'s `Report`/`bail`/`report`/`ResultExt`. Errors are `rootcause` 
    buffering. That is why `wait_for_startup_line` is deliberately a plain `fn` returning a future, not an `async fn`:
    an `async fn` would only subscribe on first poll, i.e. after the seal. Outcomes map to `StartupTimedOut` / `StartupStdoutClosed` (only when both streams closed) / `StreamRead`,
    each embedding the captured log tails.
-5. **Port-collision retry:** if ports were auto-allocated (either `site_addr` or `reload_port` unpinned) and the failure
-   tails contain "address already in use" (or the Windows equivalent), the process is dropped and startup retries with
-   fresh ports, up to `MAX_PORT_COLLISION_RETRIES` (3). Fully pinned ports fail on the first attempt.
+5. **Port-collision retry:** the startup waiters also stop on a live output line that `PortCollision::detect`
+   classifies as a site collision ("address already in use" or the Windows equivalent) or a reload collision
+   (cargo-leptos's "Reload TCP port … already in use"). If the colliding port was auto-allocated, the process is dropped
+   and startup retries with fresh ports, up to `MAX_PORT_COLLISION_RETRIES` (3) retries. Detection works on the live
+   stream, so it doesn't depend on the log tail size, and in `watch` mode (where cargo-leptos outlives the app's bind
+   panic) it doesn't wait for the startup timeout. Collisions on pinned ports, and any collision on the final attempt,
+   aren't retried. Startup then fails through the normal outcomes.
 6. The returned `LeptosTestApp` holds a `TerminateOnDrop` handle plus the two replay consumers — keeping them alive
    matters; dropping the consumers would lose log forwarding.
 
