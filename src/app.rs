@@ -1,20 +1,17 @@
 use crate::{
-    LeptosBrowserTestError, LeptosTestAppConfig, cargo_leptos,
-    error::StartupFailureContext,
-    ports,
+    LeptosBrowserTestError, LeptosTestAppConfig, cargo_leptos, ports,
     site::{format_base_url, parse_socket_addr},
-    startup::StartupLogs,
+    startup::{
+        OutputStream, RetryPolicy, StartupExpectation, StartupLogs, StartupOutcome, wait_for_ready,
+    },
 };
-use rootcause::{IntoReport, Report, bail, prelude::ResultExt};
+use rootcause::{Report, bail, prelude::ResultExt};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 use tokio_process_tools::{
-    AutoName, BroadcastOutputStream, Consumable, Consumer, DEFAULT_MAX_BUFFERED_CHUNKS,
-    DEFAULT_READ_CHUNK_SIZE, GracefulShutdown, LineParsingOptions, Next, NumBytesExt, ParseLines,
-    Process, ReliableWithBackpressure, ReplayEnabled, StreamReadError, TerminateOnDrop,
-    WaitForLineResult,
+    AutoName, Consumable, Consumer, DEFAULT_MAX_BUFFERED_CHUNKS, DEFAULT_READ_CHUNK_SIZE,
+    GracefulShutdown, LineParsingOptions, Next, NumBytesExt, ParseLines, Process, TerminateOnDrop,
 };
 use unwrap_infallible::UnwrapInfallible;
 
@@ -24,7 +21,7 @@ use unwrap_infallible::UnwrapInfallible;
 /// [`TerminateOnDrop`], which requires an active multithreaded Tokio runtime.
 /// Browser tests should use `#[tokio::test(flavor = "multi_thread")]`.
 pub struct LeptosTestApp {
-    _process: TerminateOnDrop<BroadcastOutputStream<ReliableWithBackpressure, ReplayEnabled>>,
+    _process: TerminateOnDrop<OutputStream>,
     _stdout_replay: Consumer<()>,
     _stderr_replay: Consumer<()>,
     base_url: String,
@@ -93,106 +90,42 @@ struct RuntimeConfig {
 
 /// Live process plus the log buffers and replay handles tied to it.
 struct SpawnedProcess {
-    process: TerminateOnDrop<BroadcastOutputStream<ReliableWithBackpressure, ReplayEnabled>>,
+    process: TerminateOnDrop<OutputStream>,
     stdout_replay: Consumer<()>,
     stderr_replay: Consumer<()>,
     logs: StartupLogs,
 }
 
-/// Maximum number of times we restart cargo-leptos on a port-bind collision before giving up.
-///
-/// Only collisions on an auto-allocated port are retried. If the user pinned the colliding port,
-/// that's a configuration error, not a race, and we don't retry it.
-const MAX_PORT_COLLISION_RETRIES: u32 = 3;
-
-/// Which port a startup attempt failed to bind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PortCollision {
-    /// The app could not bind its site address.
-    Site,
-    /// cargo-leptos (watch mode) could not bind the reload port.
-    Reload,
-}
-
-impl PortCollision {
-    /// Classifies a single output line as a port-bind collision, if it is one.
-    fn detect(line: &str) -> Option<Self> {
-        let lowered = line.to_ascii_lowercase();
-        // cargo-leptos probes the reload port before binding it and reports
-        // "Reload TCP port 127.0.0.1:3001 already in use. ..." when it is taken.
-        if lowered.contains("reload tcp port") && lowered.contains("already in use") {
-            return Some(Self::Reload);
-        }
-        // Linux/macOS: "Address already in use" / "address already in use (os error 48)"
-        // Windows:     "Only one usage of each socket address (protocol/network address/port)"
-        if lowered.contains("address already in use")
-            || lowered.contains("only one usage of each socket address")
-        {
-            return Some(Self::Site);
-        }
-        None
-    }
-
-    fn port_name(self) -> &'static str {
-        match self {
-            Self::Site => "site",
-            Self::Reload => "reload",
-        }
-    }
-}
-
-/// Port collisions that abort the current startup attempt so it can be retried with fresh ports.
-#[derive(Debug, Clone, Copy)]
-struct RetryPolicy {
-    site: bool,
-    reload: bool,
-}
-
-impl RetryPolicy {
-    fn for_attempt(config: &LeptosTestAppConfig, attempt: u32, max_attempts: u32) -> Self {
-        let can_retry = attempt < max_attempts;
-        Self {
-            site: can_retry && config.site_addr.is_none(),
-            reload: can_retry && config.reload_port.is_none(),
-        }
-    }
-
-    fn retries(self, collision: PortCollision) -> bool {
-        match collision {
-            PortCollision::Site => self.site,
-            PortCollision::Reload => self.reload,
-        }
-    }
-}
-
-/// How a startup attempt that did not fail ended.
-enum StartupOutcome {
-    Ready,
-    PortCollision(PortCollision),
-}
-
 pub(crate) async fn start_configured_app(
     config: LeptosTestAppConfig,
 ) -> Result<LeptosTestApp, Report<LeptosBrowserTestError>> {
-    let max_attempts = MAX_PORT_COLLISION_RETRIES + 1;
     let mut attempt = 1;
 
     // Only ever exits via `return`. The final attempt's `RetryPolicy` retries nothing, so
     // `wait_for_ready` can't report a collision for it.
     loop {
-        let retry_policy = RetryPolicy::for_attempt(&config, attempt, max_attempts);
+        let retry_policy = RetryPolicy::for_attempt(&config, attempt);
         let runtime = resolve_runtime_config(&config)?;
         let spawned = spawn_with_log_capture(&runtime, &config)?;
-        match wait_for_ready(&spawned, &runtime, &config, retry_policy).await? {
+        let expected = StartupExpectation {
+            app_name: &config.app_name,
+            startup_line: &runtime.startup_line,
+            timeout: config.startup_timeout,
+            timeout_reason: &config.startup_timeout_reason,
+        };
+        let outcome =
+            wait_for_ready(&spawned.process, &spawned.logs, &expected, retry_policy).await?;
+        match outcome {
             StartupOutcome::Ready => {
                 tracing::info!("{} started at {}", config.app_name, runtime.base_url);
                 return Ok(build_app(spawned, runtime));
             }
             StartupOutcome::PortCollision(collision) => {
                 tracing::warn!(
-                    "{} {} port collision on attempt {attempt}/{max_attempts}, retrying with fresh ports",
+                    "{} {} port collision on attempt {attempt}/{}, retrying with fresh ports",
                     config.app_name,
                     collision.port_name(),
+                    RetryPolicy::MAX_ATTEMPTS,
                 );
                 drop(spawned);
                 attempt += 1;
@@ -368,160 +301,6 @@ fn spawn_with_log_capture(
     })
 }
 
-async fn wait_for_ready(
-    spawned: &SpawnedProcess,
-    runtime: &RuntimeConfig,
-    config: &LeptosTestAppConfig,
-    retry_policy: RetryPolicy,
-) -> Result<StartupOutcome, Report<LeptosBrowserTestError>> {
-    tracing::info!(
-        "Waiting {:?} ({}) for {} to start...",
-        config.startup_timeout,
-        config.startup_timeout_reason,
-        config.app_name,
-    );
-
-    let startup_waiter = wait_for_startup_line(spawned, runtime, config, retry_policy);
-    spawned.process.seal_output_replay();
-
-    match startup_waiter.await {
-        Ok(StartupWait::Ready) => Ok(StartupOutcome::Ready),
-        Ok(StartupWait::PortCollision(collision)) => Ok(StartupOutcome::PortCollision(collision)),
-        Ok(StartupWait::StreamClosed) => {
-            bail!(LeptosBrowserTestError::StartupStdoutClosed(
-                startup_failure_context(&config.app_name, &runtime.startup_line, &spawned.logs),
-            ));
-        }
-        Ok(StartupWait::Timeout) => {
-            bail!(LeptosBrowserTestError::StartupTimedOut {
-                ctx: startup_failure_context(
-                    &config.app_name,
-                    &runtime.startup_line,
-                    &spawned.logs
-                ),
-                timeout: config.startup_timeout,
-                reason: config.startup_timeout_reason.clone(),
-            });
-        }
-        Err(err) => {
-            let err: Report<StreamReadError> = err.into_report();
-            Err(
-                err.context(LeptosBrowserTestError::StreamRead(startup_failure_context(
-                    &config.app_name,
-                    &runtime.startup_line,
-                    &spawned.logs,
-                ))),
-            )
-        }
-    }
-}
-
-/// How waiting on stdout and stderr ended.
-enum StartupWait {
-    Ready,
-    PortCollision(PortCollision),
-    StreamClosed,
-    Timeout,
-}
-
-/// Subscribes to stdout and stderr immediately and returns a future racing both for the startup
-/// line, or for a port collision that `retry` allows retrying.
-///
-/// Deliberately not an `async fn`: the subscriptions must exist before the caller seals the
-/// output replay, but an `async fn` body would only run (and subscribe) on first poll.
-fn wait_for_startup_line(
-    spawned: &SpawnedProcess,
-    runtime: &RuntimeConfig,
-    config: &LeptosTestAppConfig,
-    retry_policy: RetryPolicy,
-) -> impl Future<Output = Result<StartupWait, StreamReadError>> {
-    let (stdout_waiter, stdout_collision) =
-        wait_for_line_or_collision(spawned.process.stdout(), runtime, config, retry_policy);
-    let (stderr_waiter, stderr_collision) =
-        wait_for_line_or_collision(spawned.process.stderr(), runtime, config, retry_policy);
-
-    // A waiter stops on either the startup line or a retryable collision. Its collision slot
-    // tells the two apart.
-    let matched = |collision: &OnceLock<PortCollision>| {
-        collision.get().map_or(StartupWait::Ready, |collision| {
-            StartupWait::PortCollision(*collision)
-        })
-    };
-
-    async move {
-        tokio::pin!(stdout_waiter);
-        tokio::pin!(stderr_waiter);
-
-        let mut stdout_result = None;
-        let mut stderr_result = None;
-
-        loop {
-            tokio::select! {
-                result = &mut stdout_waiter, if stdout_result.is_none() => {
-                    stdout_result = Some(result?);
-                }
-                result = &mut stderr_waiter, if stderr_result.is_none() => {
-                    stderr_result = Some(result?);
-                }
-            }
-
-            if stdout_result == Some(WaitForLineResult::Matched) {
-                return Ok(matched(&stdout_collision));
-            }
-            if stderr_result == Some(WaitForLineResult::Matched) {
-                return Ok(matched(&stderr_collision));
-            }
-
-            match (stdout_result, stderr_result) {
-                (Some(WaitForLineResult::StreamClosed), Some(WaitForLineResult::StreamClosed)) => {
-                    return Ok(StartupWait::StreamClosed);
-                }
-                (Some(stdout), Some(stderr)) => {
-                    debug_assert!(
-                        matches!(stdout, WaitForLineResult::Timeout)
-                            || matches!(stderr, WaitForLineResult::Timeout)
-                    );
-                    return Ok(StartupWait::Timeout);
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-/// Waits on one output stream for the startup line or a collision that `retry` allows retrying.
-/// The returned slot is set when the wait stopped because of such a collision.
-fn wait_for_line_or_collision(
-    stream: &BroadcastOutputStream<ReliableWithBackpressure, ReplayEnabled>,
-    runtime: &RuntimeConfig,
-    config: &LeptosTestAppConfig,
-    retry_policy: RetryPolicy,
-) -> (
-    impl Future<Output = Result<WaitForLineResult, StreamReadError>>,
-    Arc<OnceLock<PortCollision>>,
-) {
-    let expected_line = runtime.startup_line.clone();
-    let collision = Arc::new(OnceLock::new());
-    let collision_slot = Arc::clone(&collision);
-    let waiter = stream.wait_for_line(
-        config.startup_timeout,
-        move |line| {
-            if line.contains(&expected_line) {
-                return true;
-            }
-            match PortCollision::detect(&line) {
-                Some(detected) if retry_policy.retries(detected) => {
-                    let _ = collision_slot.set(detected);
-                    true
-                }
-                _ => false,
-            }
-        },
-        LineParsingOptions::default(),
-    );
-    (waiter, collision)
-}
-
 fn build_app(spawned: SpawnedProcess, runtime: RuntimeConfig) -> LeptosTestApp {
     LeptosTestApp {
         _process: spawned.process,
@@ -531,98 +310,5 @@ fn build_app(spawned: SpawnedProcess, runtime: RuntimeConfig) -> LeptosTestApp {
         site_addr: runtime.site_addr,
         reload_port: runtime.reload_port,
         app_dir: runtime.app_dir,
-    }
-}
-
-fn startup_failure_context(
-    app_name: &str,
-    expected_line: &str,
-    logs: &StartupLogs,
-) -> StartupFailureContext {
-    StartupFailureContext {
-        app_name: app_name.to_owned(),
-        expected_line: expected_line.to_owned(),
-        stdout_tail: logs.stdout_tail(),
-        stderr_tail: logs.stderr_tail(),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use assertr::prelude::*;
-
-    use super::{PortCollision, RetryPolicy};
-    use crate::LeptosTestAppConfig;
-
-    #[test]
-    fn detects_unix_address_already_in_use() {
-        assert_that!(PortCollision::detect(
-            "Error: Address already in use (os error 48)"
-        ))
-        .is_equal_to(Some(PortCollision::Site));
-    }
-
-    #[test]
-    fn detects_lowercase_address_already_in_use() {
-        assert_that!(PortCollision::detect(
-            "thread 'main' panicked: address already in use"
-        ))
-        .is_equal_to(Some(PortCollision::Site));
-    }
-
-    #[test]
-    fn detects_windows_phrasing() {
-        assert_that!(PortCollision::detect(
-            "Only one usage of each socket address (protocol/network address/port) is normally permitted"
-        ))
-        .is_equal_to(Some(PortCollision::Site));
-    }
-
-    #[test]
-    fn detects_cargo_leptos_reload_port_collision() {
-        assert_that!(PortCollision::detect(
-            "Reload TCP port 127.0.0.1:3001 already in use. You can set the port in the server integration's RenderOptions reload_port"
-        ))
-        .is_equal_to(Some(PortCollision::Reload));
-    }
-
-    #[test]
-    fn rejects_unrelated_errors() {
-        assert_that!(PortCollision::detect(
-            "error: linking with `cc` failed: exit status: 1"
-        ))
-        .is_equal_to(None);
-        assert_that!(PortCollision::detect("")).is_equal_to(None);
-    }
-
-    #[test]
-    fn retries_collisions_on_auto_allocated_ports() {
-        let config = LeptosTestAppConfig::new("./test-app");
-        let retry = RetryPolicy::for_attempt(&config, 1, 4);
-
-        assert_that!(retry.retries(PortCollision::Site)).is_true();
-        assert_that!(retry.retries(PortCollision::Reload)).is_true();
-    }
-
-    #[test]
-    fn does_not_retry_collisions_on_pinned_ports() {
-        let site_pinned = LeptosTestAppConfig::new("./test-app").with_site_addr("127.0.0.1:3000");
-        let retry = RetryPolicy::for_attempt(&site_pinned, 1, 4);
-        assert_that!(retry.retries(PortCollision::Site)).is_false();
-        assert_that!(retry.retries(PortCollision::Reload)).is_true();
-
-        let reload_pinned = LeptosTestAppConfig::new("./test-app").with_reload_port(3001);
-        let retry = RetryPolicy::for_attempt(&reload_pinned, 1, 4);
-        assert_that!(retry.retries(PortCollision::Site)).is_true();
-        assert_that!(retry.retries(PortCollision::Reload)).is_false();
-    }
-
-    #[test]
-    fn does_not_retry_on_the_final_attempt() {
-        let config = LeptosTestAppConfig::new("./test-app");
-        let retry = RetryPolicy::for_attempt(&config, 4, 4);
-
-        assert_that!(retry.retries(PortCollision::Site)).is_false();
-        assert_that!(retry.retries(PortCollision::Reload)).is_false();
     }
 }

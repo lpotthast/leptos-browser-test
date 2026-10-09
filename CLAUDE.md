@@ -80,18 +80,18 @@ plus `rootcause`'s `Report`/`bail`/`report`/`ResultExt`. Errors are `rootcause` 
    it when bumping `tokio-process-tools` adds variants.
 3. Spawn under `tokio_process_tools::Process` with stdout+stderr as `BroadcastOutputStream`s (reliable with
    backpressure + 1 MB replay). Two `ParseLines::inspect_async` consumers tee lines into the bounded `StartupLogs` ring
-   buffers (`src/startup.rs`) and, when `forward_logs` is true, write to parent stdout/stderr via
+   buffers (`src/startup/logs.rs`) and, when `forward_logs` is true, write to parent stdout/stderr via
    `tokio::io::stdout()/stderr()` — **not** `print!`, which panics on `EAGAIN` once tokio has put the stdio fds into
    non-blocking mode.
-4. `wait_for_ready` races `wait_for_line` on **both** stdout and stderr; whichever matches first wins.
+4. `wait_for_ready` (`src/startup/readiness.rs`) races `wait_for_line` on **both** stdout and stderr; whichever matches first wins.
    `seal_output_replay()` is called after creating the waiters but *before* awaiting, so late subscribers don't keep
    buffering. That is why `wait_for_startup_line` is deliberately a plain `fn` returning a future, not an `async fn`:
    an `async fn` would only subscribe on first poll, i.e. after the seal. Outcomes map to `StartupTimedOut` / `StartupStdoutClosed` (only when both streams closed) / `StreamRead`,
    each embedding the captured log tails.
-5. **Port-collision retry:** the startup waiters also stop on a live output line that `PortCollision::detect`
+5. **Port-collision retry:** the startup waiters also stop on a live output line that `PortCollision::detect` (`src/startup/collision.rs`)
    classifies as a site collision ("address already in use" or the Windows equivalent) or a reload collision
    (cargo-leptos's "Reload TCP port … already in use"). If the colliding port was auto-allocated, the process is dropped
-   and startup retries with fresh ports, up to `MAX_PORT_COLLISION_RETRIES` (3) retries. Detection works on the live
+   and startup retries with fresh ports, up to `MAX_PORT_COLLISION_RETRIES` (3) retries, as decided by `RetryPolicy` (`src/startup/retry.rs`). Detection works on the live
    stream, so it doesn't depend on the log tail size, and in `watch` mode (where cargo-leptos outlives the app's bind
    panic) it doesn't wait for the startup timeout. Collisions on pinned ports, and any collision on the final attempt,
    aren't retried. Startup then fails through the normal outcomes.
