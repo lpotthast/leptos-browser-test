@@ -5,6 +5,10 @@ on:
     branches: [ main ]
   pull_request:
     branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -18,42 +22,38 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
-  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-targets --locked
-
+  # Clippy also performs a full `cargo check`, so no separate check job is needed.
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings -W clippy::pedantic
 
   test-unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --lib --locked
+      # README.md is the crate-level documentation, so this also compiles its examples.
+      - run: cargo test --doc --locked
 
   test-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -63,31 +63,42 @@ jobs:
           workspaces: |
             .
             tests/fixtures/leptos-ssr-app
-      # Fork required: leptos-browser-test sets LEPTOS_GRACEFUL_SHUTDOWN_* env vars
-      # that depend on https://github.com/leptos-rs/cargo-leptos/pull/648 (not yet released).
-      - run: cargo install --locked --git https://github.com/lpotthast/cargo-leptos --branch graceful-shutdown-v2 cargo-leptos
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-leptos
+      # Run sequentially so concurrent fixture builds don't race over the same `target/`.
       - run: cargo test --test smoke --locked -- --test-threads=1
 
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
 
   doc:
     runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo doc --release --locked
+      - run: cargo doc --no-deps --release --locked
 
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.89.0
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --all-targets --locked
+
+  advisories:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories

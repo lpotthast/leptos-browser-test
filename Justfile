@@ -1,62 +1,81 @@
+msrv_toolchain := "1.89.0"
+
 # Lists all available commands.
 list:
-  just --list
+    just --list
 
-# Install dependencies for maintenance work, profiling and more...
+# Install tools required by other recipes.
 install-tools:
-  cargo +stable install --locked cargo-hack
-  cargo +stable install --locked cargo-minimal-versions
-  cargo +stable install --locked cargo-msrv
-  cargo +stable install --locked cargo-expand
-  cargo +stable install --locked cargo-whatfeatures
-  cargo +stable install --locked cargo-upgrades
-  cargo +stable install --locked cargo-edit
-  cargo +stable install --locked wasm-bindgen-cli
-  cargo +stable install --locked --git https://github.com/lpotthast/cargo-leptos --branch graceful-shutdown-v2 cargo-leptos
+    rustup toolchain add {{ msrv_toolchain }}
+    rustup target add wasm32-unknown-unknown
+    cargo +stable install --locked cargo-hack
+    cargo +stable install --locked cargo-minimal-versions
+    cargo +stable install --locked cargo-msrv
+    cargo +stable install --locked cargo-sort
+    cargo +stable install --locked cargo-expand
+    cargo +stable install --locked cargo-whatfeatures
+    cargo +stable install --locked cargo-upgrades
+    cargo +stable install --locked cargo-edit
+    cargo +stable install --locked wasm-bindgen-cli
+    cargo +stable install --locked cargo-leptos
 
-# Find the minimum supported rust version
+# Find the minimum supported rust version.
 msrv:
     cargo msrv find
+
+# Check that the crate still builds on the declared minimum supported rust version.
+check-msrv:
+    cargo +{{ msrv_toolchain }} check --all-targets --locked
 
 # Check if the current dependency version bounds are sufficient.
 minimal-versions:
     cargo minimal-versions check --workspace --direct
 
+# Format all code.
 fmt:
     cargo fmt --all
 
+# Check formatting without modifying files.
 fmt-check:
     cargo fmt --all -- --check
 
+# Check the code.
+check:
+    cargo check --all-targets --locked
+
+# Lint the code.
 lint:
-    cargo clippy --all-targets --all-features -- -D warnings
+    cargo clippy --all-targets --all-features --locked -- -D warnings -W clippy::pedantic
 
+# Run the in-module unit tests.
 test-unit:
-    cargo test --lib -- --nocapture
+    cargo test --lib --locked -- --nocapture
 
-# Run sequentially to avoid race-errors.
+# Compile and run the README / rustdoc examples.
+test-doc:
+    cargo test --doc --locked
+
+# Run the end-to-end smoke tests against the SSR fixture (requires cargo-leptos and the wasm target).
+# Run sequentially so concurrent fixture builds don't race over the same `target/`.
 test-smoke:
-    cargo test --test smoke -- --test-threads=1 --nocapture
+    cargo test --test smoke --locked -- --test-threads=1 --nocapture
 
-test: test-unit test-smoke
+# Run all tests.
+test: test-unit test-doc test-smoke
 
+# Build the crate.
 build:
-    cargo build
+    cargo build --locked
 
+# Build the crate documentation with warnings treated as errors.
 doc:
-    cargo doc
+    RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked
 
-bench:
-    cargo bench
+# Update dependencies, sort manifests, and format code.
+tidy:
+    cargo update --workspace
+    cargo sort --workspace
+    cargo fmt --all
 
-bench-smoke:
-    cargo bench --no-run
-
-bench-chunks:
-    cargo bench --bench chunk_delivery
-
-bench-lines:
-    cargo bench --bench line_delivery
-
-# Run the full validation suite: check, clippy, test, build, doc
-verify: fmt-check lint test build doc
+# Run the full non-mutating validation suite.
+verify: fmt-check check lint test build doc check-msrv

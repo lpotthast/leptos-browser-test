@@ -11,16 +11,7 @@ documentation = "https://docs.rs/leptos-browser-test"
 description = "Leptos test-app launcher for browser-driven integration tests."
 categories = ["development-tools::testing", "web-programming"]
 keywords = ["leptos", "browser", "webdriver", "testing"]
-exclude = [
-    ".github",
-    ".idea",
-    ".claude",
-    ".vscode",
-    "AGENTS.md",
-    "CLAUDE.md",
-    "Justfile",
-    "tests",
-]
+include = ["/src/**", "/README.md", "/CHANGELOG.md", "/LICENSE-*"]
 
 [dependencies]
 rootcause = { version = "0.13.0", default-features = false }
