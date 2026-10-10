@@ -21,7 +21,8 @@ use std::{
 
 use assertr::prelude::*;
 use leptos_browser_test::{
-    CapturedOutput, LeptosBrowserTestError, LeptosTestAppConfig, UnixGracefulSignal,
+    CapturedOutput, CargoLeptosMode, LeptosBrowserTestError, LeptosTestAppConfig,
+    UnixGracefulSignal,
 };
 
 /// Absolute path to the SSR fixture directory.
@@ -157,15 +158,45 @@ async fn surfaces_startup_timeout_with_log_tail() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn pinned_site_port_in_use_fails_fast() {
-    // Occupy a port and pin the app to it. The app's bind panics with "Address already in use",
-    // and because the port is pinned, startup must fail right away instead of retrying or
-    // waiting for the startup timeout.
+async fn pinned_site_port_in_use_fails_fast_in_serve_mode() {
+    // In `serve` mode, cargo-leptos exits after the app's bind panic.
+    assert_pinned_site_port_in_use_fails(CargoLeptosMode::Serve).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pinned_site_port_in_use_fails_fast_in_watch_mode() {
+    // Build the fixture first, so that the timing below only covers startup.
+    let warm_up = LeptosTestAppConfig::new(fixture_path())
+        .with_app_name("leptos-ssr-app")
+        .with_mode(CargoLeptosMode::Watch)
+        .with_startup_timeout(
+            Duration::from_secs(600),
+            "Cold builds of the Leptos fixture (server + wasm) can take several minutes.",
+        )
+        .start()
+        .await
+        .expect("warm-up start in watch mode");
+    drop(warm_up);
+
+    // In `watch` mode, cargo-leptos keeps running after the app's bind panic, so its output never
+    // closes. Without fast-fail detection, startup would only give up after the 600s timeout.
+    let started = Instant::now();
+    assert_pinned_site_port_in_use_fails(CargoLeptosMode::Watch).await;
+    assert_that!(started.elapsed())
+        .with_detail_message("watch-mode startup should fail fast on a port collision")
+        .is_less_than(Duration::from_secs(120));
+}
+
+/// Occupies a port and pins the app to it. The app's bind panics with "Address already in use",
+/// and because the port is pinned, startup must fail with `PortInUse` instead of retrying or
+/// waiting for the startup timeout.
+async fn assert_pinned_site_port_in_use_fails(mode: CargoLeptosMode) {
     let blocker = std::net::TcpListener::bind("127.0.0.1:0").expect("bind blocker port");
     let site_addr = blocker.local_addr().expect("blocker addr").to_string();
 
     let result = LeptosTestAppConfig::new(fixture_path())
         .with_app_name("leptos-ssr-app")
+        .with_mode(mode)
         .with_site_addr(site_addr.clone())
         .with_startup_timeout(
             Duration::from_secs(600),
