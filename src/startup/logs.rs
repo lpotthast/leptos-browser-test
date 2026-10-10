@@ -65,7 +65,9 @@ impl StartupLogs {
 /// The most recent stdout and stderr lines of the `cargo leptos` process, captured when startup
 /// failed.
 ///
-/// Attached to the report of every startup failure. Each
+/// Attached to the report of every startup failure that happens once `cargo leptos` is running.
+/// Failures before that, such as an unresolvable app directory or `cargo leptos` failing to spawn,
+/// have no output and no attachment, so [`find_in`](Self::find_in) returns `None` for them. Each
 /// [`LeptosBrowserTestError`](crate::LeptosBrowserTestError) variant that gets it says so in its
 /// docs. How many lines are kept is set by
 /// [`LeptosTestAppConfig::with_startup_log_tail_lines`](crate::LeptosTestAppConfig::with_startup_log_tail_lines).
@@ -102,6 +104,9 @@ impl CapturedOutput {
 
     /// Finds the captured output attached anywhere in `report`, including reports wrapped in
     /// further context.
+    ///
+    /// Returns `None` for failures that happened before `cargo leptos` was running, since those
+    /// have no output.
     #[must_use]
     pub fn find_in<C: ?Sized>(report: &Report<C>) -> Option<&Self> {
         report.iter_reports().find_map(|node| {

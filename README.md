@@ -194,9 +194,12 @@ The timeout is forwarded to `cargo leptos` via `LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT
 
 ### Startup failures
 
-If the app doesn't start, the returned report says why (timeout, closed output, a port already in use, or a read
-error) and carries the most recent stdout/stderr lines of `cargo leptos` as a `CapturedOutput` attachment. Printing
-the report shows them. To use them in code, look them up using:
+If the app doesn't start, the returned report says why. When `cargo leptos` was already running (timeout, closed
+output, a port already in use, or a read error), the report also carries its most recent stdout/stderr lines as a
+`CapturedOutput` attachment. Printing the report shows them. Failures before that point (an unresolvable app
+directory, an invalid `site_addr`, no free port, or `cargo leptos` failing to spawn, e.g. because cargo-leptos isn't
+installed) have no output to capture, so don't expect the attachment to always be present. To use the output in code,
+look it up using:
 
 ```rust,no_run
 use leptos_browser_test::{CapturedOutput, LeptosTestAppConfig};

@@ -14,8 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LeptosTestAppConfig::with_build_profile(BuildProfile::Release)` builds the app with `cargo leptos serve --release`
   (or `watch --release`). Defaults to `BuildProfile::Dev`. See the README's "Build profile".
 - `LeptosTestApp` now implements `Debug`, showing its base URL, site address, reload port, and app directory.
-- `CapturedOutput`, the recent stdout/stderr of `cargo leptos`, attached to every startup-failure report. Find it with
-  `CapturedOutput::find_in(&report)`, even after further context was added. Printing the whole report still shows it.
+- `CapturedOutput`, the recent stdout/stderr of `cargo leptos`, attached to every report of a startup failure that
+  happened once `cargo leptos` was running. Find it with `CapturedOutput::find_in(&report)`, even after further
+  context was added. Printing the whole report still shows it.
 - `LeptosBrowserTestError::PortInUse` and `LeptosBrowserTestError::ReloadPortInUse`. When a port collision can't be
   retried (the port was pinned, or it happened on the final attempt), startup now fails with one of these. Previously
   it fell through to a generic error, and in `watch` mode it waited for the full startup timeout. `PortInUse` covers
