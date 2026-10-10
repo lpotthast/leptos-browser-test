@@ -1,13 +1,15 @@
-use crate::{
-    BuildProfile, CargoLeptosMode, LeptosBrowserTestError, SiteScheme, app::LeptosTestApp,
-};
-use rootcause::Report;
 use std::{
     ffi::{OsStr, OsString},
     path::PathBuf,
     time::Duration,
 };
+
+use rootcause::Report;
 use tokio_process_tools::UnixGracefulSignal;
+
+use crate::{
+    BuildProfile, CargoLeptosMode, LeptosBrowserTestError, SiteScheme, app::LeptosTestApp,
+};
 
 const DEFAULT_STARTUP_LOG_TAIL_LINES: usize = 200;
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(60 * 10);
@@ -230,14 +232,15 @@ impl LeptosTestAppConfig {
 mod tests {
     use std::time::Duration;
 
+    use assertr::prelude::*;
+    use tokio_process_tools::UnixGracefulSignal;
+
     use super::{
         DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT, DEFAULT_GRACEFUL_SHUTDOWN_UNIX_SIGNAL,
         DEFAULT_STARTUP_LOG_TAIL_LINES, DEFAULT_STARTUP_TIMEOUT, DEFAULT_STARTUP_TIMEOUT_REASON,
         LeptosTestAppConfig,
     };
     use crate::{BuildProfile, CargoLeptosMode, SiteScheme};
-    use assertr::prelude::*;
-    use tokio_process_tools::UnixGracefulSignal;
 
     #[test]
     fn new_uses_documented_defaults() {

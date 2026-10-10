@@ -14,11 +14,14 @@
 //! Subsequent runs reuse the fixture's `target/` cache and are much faster. The startup
 //! timeout used in tests below is generous accordingly.
 
-use assertr::prelude::*;
-use leptos_browser_test::{LeptosTestAppConfig, UnixGracefulSignal};
 use std::{
     path::PathBuf,
     time::{Duration, Instant},
+};
+
+use assertr::prelude::*;
+use leptos_browser_test::{
+    CapturedOutput, LeptosBrowserTestError, LeptosTestAppConfig, UnixGracefulSignal,
 };
 
 /// Absolute path to the SSR fixture directory.
@@ -139,4 +142,59 @@ async fn surfaces_startup_timeout_with_log_tail() {
     assert_that!(display.as_str())
         .with_detail_message(format!("expected timeout reason in error; got: {display}"))
         .contains(reason);
+
+    // The captured process output travels with the report as an attachment, and printing the
+    // whole report shows it.
+    assert_that!(CapturedOutput::find_in(&err).is_some())
+        .with_detail_message("expected a CapturedOutput attachment on the report")
+        .is_true();
+    let full_report = err.to_string();
+    assert_that!(full_report.as_str())
+        .with_detail_message(format!(
+            "expected captured output in report; got: {full_report}"
+        ))
+        .contains("Recent stderr:");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pinned_site_port_in_use_fails_fast() {
+    // Occupy a port and pin the app to it. The app's bind panics with "Address already in use",
+    // and because the port is pinned, startup must fail right away instead of retrying or
+    // waiting for the startup timeout.
+    let blocker = std::net::TcpListener::bind("127.0.0.1:0").expect("bind blocker port");
+    let site_addr = blocker.local_addr().expect("blocker addr").to_string();
+
+    let result = LeptosTestAppConfig::new(fixture_path())
+        .with_app_name("leptos-ssr-app")
+        .with_site_addr(site_addr.clone())
+        .with_startup_timeout(
+            Duration::from_secs(600),
+            "Cold builds of the Leptos fixture (server + wasm) can take several minutes.",
+        )
+        .start()
+        .await;
+
+    let err = assert_that_owned!(result)
+        .with_detail_message("startup on an occupied pinned port should fail")
+        .get_err()
+        .unwrap_inner();
+    let context = err.current_context();
+    assert_that!(matches!(
+        context,
+        LeptosBrowserTestError::SitePortInUse { site_addr: addr, .. } if *addr == site_addr
+    ))
+    .with_detail_message(format!(
+        "expected SitePortInUse for {site_addr}, got: {context:?}"
+    ))
+    .is_true();
+
+    let output = CapturedOutput::find_in(&err).expect("captured output attachment");
+    let combined = format!("{}\n{}", output.stdout(), output.stderr()).to_ascii_lowercase();
+    assert_that!(combined.as_str())
+        .with_detail_message(format!(
+            "expected the bind failure in the captured output: {output}"
+        ))
+        .contains("address already in use");
+
+    drop(blocker);
 }

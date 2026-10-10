@@ -26,7 +26,7 @@ Test orchestration is intentionally left to the consumer. Take a look at
 
 ```toml
 [dev-dependencies]
-leptos-browser-test = "0.3.1"
+leptos-browser-test = "0.4.0"
 ```
 
 ## Runtime requirements
@@ -191,6 +191,26 @@ async fn example() -> Result<(), leptos_browser_test::Report> {
 
 The timeout is forwarded to `cargo leptos` via `LEPTOS_GRACEFUL_SHUTDOWN_TIMEOUT_SECS`, the signal via
 `LEPTOS_GRACEFUL_SHUTDOWN_UNIX_SIGNAL`. The signal selector is ignored on Windows.
+
+### Startup failures
+
+If the app doesn't start, the returned report says why (timeout, closed output, a port already in use, or a read
+error) and carries the most recent stdout/stderr lines of `cargo leptos` as a `CapturedOutput` attachment. Printing
+the report shows them. To use them in code, look them up using:
+
+```rust,no_run
+use leptos_browser_test::{CapturedOutput, LeptosTestAppConfig};
+
+async fn example() {
+    if let Err(report) = LeptosTestAppConfig::new("testing/test-app").start().await {
+        if let Some(output) = CapturedOutput::find_in(&report) {
+            eprintln!("cargo leptos stderr:\n{}", output.stderr());
+        }
+    }
+}
+```
+
+`with_startup_log_tail_lines` sets how many lines per stream are kept (default 200).
 
 ### Manual debugging
 

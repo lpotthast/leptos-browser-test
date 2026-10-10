@@ -4,25 +4,9 @@ use thiserror::Error;
 
 use crate::CargoLeptosMode;
 
-/// Diagnostic context attached to startup-failure variants.
-///
-/// Carries the descriptive app name, the output fragment we were waiting for, and the most
-/// recent stdout/stderr lines captured before the failure was reported. The tails are bounded
-/// by [`LeptosTestAppConfig::with_startup_log_tail_lines`](crate::LeptosTestAppConfig::with_startup_log_tail_lines).
-#[derive(Debug, PartialEq, Eq)]
-pub struct StartupFailureContext {
-    /// The descriptive app name.
-    pub app_name: String,
-    /// The expected startup line fragment.
-    pub expected_line: String,
-    /// Recent stdout lines.
-    pub stdout_tail: String,
-    /// Recent stderr lines.
-    pub stderr_tail: String,
-}
-
-/// Error contexts reported by Leptos test app startup operations.
+/// Error contexts reported by `LeptosTestApp` startup operations.
 #[derive(Debug, PartialEq, Eq, Error)]
+#[non_exhaustive]
 pub enum LeptosBrowserTestError {
     /// The configured test app directory could not be resolved.
     #[error("failed to resolve {app_name} directory {app_dir:?}")]
@@ -56,27 +40,32 @@ pub enum LeptosBrowserTestError {
         app_name: String,
     },
 
-    /// The frontend stdout and stderr streams closed before startup completed.
+    /// The frontend stdout or stderr stream closed before startup completed.
+    ///
+    /// The report carries the recent output of `cargo leptos` as a
+    /// [`CapturedOutput`](crate::CapturedOutput) attachment.
     #[error(
-        "{app_name} output closed before startup completed. Expected stdout or stderr to contain {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
-        app_name = .0.app_name,
-        expected_line = .0.expected_line,
-        stdout_tail = .0.stdout_tail,
-        stderr_tail = .0.stderr_tail,
+        "{app_name} output closed before startup completed. Expected stdout or stderr to contain {expected_line:?}."
     )]
-    StartupStdoutClosed(StartupFailureContext),
+    StartupOutputClosed {
+        /// The descriptive app name.
+        app_name: String,
+        /// The expected startup line fragment.
+        expected_line: String,
+    },
 
     /// The frontend did not produce the expected startup line before the timeout.
+    ///
+    /// The report carries the recent output of `cargo leptos` as a
+    /// [`CapturedOutput`](crate::CapturedOutput) attachment.
     #[error(
-        "{app_name} did not start within {timeout:?} ({reason}); expected stdout or stderr to contain {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
-        app_name = ctx.app_name,
-        expected_line = ctx.expected_line,
-        stdout_tail = ctx.stdout_tail,
-        stderr_tail = ctx.stderr_tail,
+        "{app_name} did not start within {timeout:?} ({reason}). Expected stdout or stderr to contain {expected_line:?}."
     )]
     StartupTimedOut {
-        /// Diagnostic context (app name, expected line, captured tails).
-        ctx: StartupFailureContext,
+        /// The descriptive app name.
+        app_name: String,
+        /// The expected startup line fragment.
+        expected_line: String,
         /// The configured startup timeout.
         timeout: Duration,
         /// The caller-supplied reason that justified this particular timeout, recorded by
@@ -85,14 +74,53 @@ pub enum LeptosBrowserTestError {
     },
 
     /// Reading the frontend output streams failed before the startup line was observed.
+    ///
+    /// The report carries the recent output of `cargo leptos` as a
+    /// [`CapturedOutput`](crate::CapturedOutput) attachment.
+    #[error("{app_name} failed to read output while waiting for {expected_line:?}.")]
+    StreamRead {
+        /// The descriptive app name.
+        app_name: String,
+        /// The expected startup line fragment.
+        expected_line: String,
+    },
+
+    /// The app could not bind its site address because the port is already in use.
+    ///
+    /// Reported as soon as the bind failure shows up in the output, without waiting for the
+    /// startup timeout. Startup only gives up like this when it can't retry with a fresh port:
+    /// the site address was pinned with
+    /// [`with_site_addr`](crate::LeptosTestAppConfig::with_site_addr), or every retry with an
+    /// auto-allocated port collided as well.
+    ///
+    /// The report carries the recent output of `cargo leptos` as a
+    /// [`CapturedOutput`](crate::CapturedOutput) attachment.
+    #[error("{app_name} could not bind site address {site_addr} because it is already in use.")]
+    SitePortInUse {
+        /// The descriptive app name.
+        app_name: String,
+        /// The site address the app tried to bind.
+        site_addr: String,
+    },
+
+    /// cargo-leptos could not bind the reload port because it is already in use.
+    ///
+    /// Only happens in [`Watch`](crate::CargoLeptosMode::Watch) mode, which serves the reload
+    /// port. Like [`SitePortInUse`](Self::SitePortInUse), this is reported immediately, once the
+    /// reload port was pinned with
+    /// [`with_reload_port`](crate::LeptosTestAppConfig::with_reload_port) or every retry collided.
+    ///
+    /// The report carries the recent output of `cargo leptos` as a
+    /// [`CapturedOutput`](crate::CapturedOutput) attachment.
     #[error(
-        "{app_name} failed to read output while waiting for {expected_line:?}.\n\nRecent stdout:\n{stdout_tail}\n\nRecent stderr:\n{stderr_tail}",
-        app_name = .0.app_name,
-        expected_line = .0.expected_line,
-        stdout_tail = .0.stdout_tail,
-        stderr_tail = .0.stderr_tail,
+        "cargo-leptos could not bind reload port {reload_port} for {app_name} because it is already in use."
     )]
-    StreamRead(StartupFailureContext),
+    ReloadPortInUse {
+        /// The descriptive app name.
+        app_name: String,
+        /// The reload port cargo-leptos tried to bind.
+        reload_port: u16,
+    },
 
     /// The configured site address could not be parsed as a `host:port` socket address.
     #[error("invalid site_addr {site_addr:?} for {app_name}: expected `host:port`")]
@@ -110,22 +138,16 @@ mod tests {
 
     use assertr::prelude::*;
 
-    use super::{LeptosBrowserTestError, StartupFailureContext};
-
-    fn ctx() -> StartupFailureContext {
-        StartupFailureContext {
-            app_name: "demo".to_owned(),
-            expected_line: "listening on".to_owned(),
-            stdout_tail: "out-line".to_owned(),
-            stderr_tail: "err-line".to_owned(),
-        }
-    }
+    use super::LeptosBrowserTestError;
 
     #[test]
-    fn startup_stdout_closed_display_matches_documented_format() {
-        let err = LeptosBrowserTestError::StartupStdoutClosed(ctx());
+    fn startup_output_closed_display_matches_documented_format() {
+        let err = LeptosBrowserTestError::StartupOutputClosed {
+            app_name: "demo".to_owned(),
+            expected_line: "listening on".to_owned(),
+        };
         assert_that!(err.to_string()).is_equal_to(
-            "demo output closed before startup completed. Expected stdout or stderr to contain \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
+            "demo output closed before startup completed. Expected stdout or stderr to contain \"listening on\"."
                 .to_owned(),
         );
     }
@@ -133,21 +155,48 @@ mod tests {
     #[test]
     fn startup_timed_out_display_matches_documented_format() {
         let err = LeptosBrowserTestError::StartupTimedOut {
-            ctx: ctx(),
+            app_name: "demo".to_owned(),
+            expected_line: "listening on".to_owned(),
             timeout: Duration::from_secs(7),
             reason: "tight bound for unit-style smoke test".to_owned(),
         };
         assert_that!(err.to_string()).is_equal_to(
-            "demo did not start within 7s (tight bound for unit-style smoke test); expected stdout or stderr to contain \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
+            "demo did not start within 7s (tight bound for unit-style smoke test). Expected stdout or stderr to contain \"listening on\"."
                 .to_owned(),
         );
     }
 
     #[test]
     fn stream_read_display_matches_documented_format() {
-        let err = LeptosBrowserTestError::StreamRead(ctx());
+        let err = LeptosBrowserTestError::StreamRead {
+            app_name: "demo".to_owned(),
+            expected_line: "listening on".to_owned(),
+        };
         assert_that!(err.to_string()).is_equal_to(
-            "demo failed to read output while waiting for \"listening on\".\n\nRecent stdout:\nout-line\n\nRecent stderr:\nerr-line"
+            "demo failed to read output while waiting for \"listening on\".".to_owned(),
+        );
+    }
+
+    #[test]
+    fn site_port_in_use_display_matches_documented_format() {
+        let err = LeptosBrowserTestError::SitePortInUse {
+            app_name: "demo".to_owned(),
+            site_addr: "127.0.0.1:3000".to_owned(),
+        };
+        assert_that!(err.to_string()).is_equal_to(
+            "demo could not bind site address 127.0.0.1:3000 because it is already in use."
+                .to_owned(),
+        );
+    }
+
+    #[test]
+    fn reload_port_in_use_display_matches_documented_format() {
+        let err = LeptosBrowserTestError::ReloadPortInUse {
+            app_name: "demo".to_owned(),
+            reload_port: 3001,
+        };
+        assert_that!(err.to_string()).is_equal_to(
+            "cargo-leptos could not bind reload port 3001 for demo because it is already in use."
                 .to_owned(),
         );
     }

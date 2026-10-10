@@ -62,9 +62,12 @@ clippy covers it; `build` and `doc` run with `--release`): `test-unit` runs `car
 ## Architecture
 
 The public surface is small and re-exported from `src/lib.rs`: `LeptosTestApp`, `LeptosTestAppConfig` (builder),
-`CargoLeptosMode`, `BuildProfile`, `SiteScheme`, `LeptosBrowserTestError`, `tokio_process_tools::UnixGracefulSignal`,
-plus `rootcause`'s `Report`/`bail`/`report`/`ResultExt`. Errors are `rootcause` reports wrapping a `thiserror` enum
-(`src/error.rs`); startup-failure variants carry a `StartupFailureContext` with the captured stdout/stderr tails.
+`CargoLeptosMode`, `BuildProfile`, `SiteScheme`, `LeptosBrowserTestError`, `CapturedOutput`,
+`tokio_process_tools::UnixGracefulSignal`, plus `rootcause`'s `Report`/`bail`/`report`/`ResultExt`. Errors are
+`rootcause` reports wrapping a `thiserror` enum (`src/error.rs`). The enum variants only describe the failure. The
+captured stdout/stderr tails of a startup failure travel as a `CapturedOutput` attachment on the report
+(`src/startup/logs.rs`), which callers find with `CapturedOutput::find_in`. Keep diagnostics in attachments rather
+than adding them to the variants.
 
 **Startup orchestration** (`src/app.rs::start_configured_app`) is the load-bearing path:
 
@@ -86,15 +89,18 @@ plus `rootcause`'s `Report`/`bail`/`report`/`ResultExt`. Errors are `rootcause` 
 4. `wait_for_ready` (`src/startup/readiness.rs`) races `wait_for_line` on **both** stdout and stderr; whichever matches first wins.
    `seal_output_replay()` is called after creating the waiters but *before* awaiting, so late subscribers don't keep
    buffering. That is why `wait_for_startup_line` is deliberately a plain `fn` returning a future, not an `async fn`:
-   an `async fn` would only subscribe on first poll, i.e. after the seal. Outcomes map to `StartupTimedOut` / `StartupStdoutClosed` (only when both streams closed) / `StreamRead`,
-   each embedding the captured log tails.
+   an `async fn` would only subscribe on first poll, i.e. after the seal. Outcomes map to `StartupTimedOut` /
+   `StartupOutputClosed` (only when both streams closed) / `StreamRead` / `SitePortInUse` / `ReloadPortInUse`, each
+   with the captured log tails attached as `CapturedOutput`. The waiters and the log consumers are separate
+   subscribers, so on failure `StartupLogs::snapshot_after` waits (up to 1s) until the buffers have received as many
+   lines as the waiters saw. Otherwise the line that ended the wait can be missing from the attachment.
 5. **Port-collision retry:** the startup waiters also stop on a live output line that `PortCollision::detect` (`src/startup/collision.rs`)
    classifies as a site collision ("address already in use" or the Windows equivalent) or a reload collision
    (cargo-leptos's "Reload TCP port … already in use"). If the colliding port was auto-allocated, the process is dropped
    and startup retries with fresh ports, up to `MAX_PORT_COLLISION_RETRIES` (3) retries, as decided by `RetryPolicy` (`src/startup/retry.rs`). Detection works on the live
    stream, so it doesn't depend on the log tail size, and in `watch` mode (where cargo-leptos outlives the app's bind
    panic) it doesn't wait for the startup timeout. Collisions on pinned ports, and any collision on the final attempt,
-   aren't retried. Startup then fails through the normal outcomes.
+   aren't retried. They fail immediately with `SitePortInUse` / `ReloadPortInUse`.
 6. The returned `LeptosTestApp` holds a `TerminateOnDrop` handle plus the two replay consumers — keeping them alive
    matters; dropping the consumers would lose log forwarding.
 

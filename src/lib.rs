@@ -12,9 +12,7 @@ pub use app::LeptosTestApp;
 pub use cargo_leptos::{BuildProfile, CargoLeptosMode};
 pub use config::LeptosTestAppConfig;
 pub use error::LeptosBrowserTestError;
+pub use rootcause::{Report, bail, prelude::ResultExt, report};
 pub use site::SiteScheme;
-
+pub use startup::CapturedOutput;
 pub use tokio_process_tools::UnixGracefulSignal;
-
-pub use rootcause::prelude::ResultExt;
-pub use rootcause::{Report, bail, report};

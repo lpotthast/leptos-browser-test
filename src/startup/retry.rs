@@ -1,6 +1,5 @@
-use crate::LeptosTestAppConfig;
-
 use super::collision::PortCollision;
+use crate::LeptosTestAppConfig;
 
 /// Maximum number of times we restart cargo-leptos on a port-bind collision before giving up.
 ///

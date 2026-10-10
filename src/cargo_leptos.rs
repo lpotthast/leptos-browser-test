@@ -1,9 +1,10 @@
-use std::time::Duration;
 use std::{
     env,
     ffi::{OsStr, OsString},
     path::Path,
+    time::Duration,
 };
+
 use tokio::process::Command;
 use tokio_process_tools::UnixGracefulSignal;
 
@@ -121,11 +122,12 @@ pub(crate) fn cargo_program(cmd: &Command) -> &OsStr {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildProfile, CargoLeptosMode, cargo_program, command, whole_secs_rounded_up};
+    use std::{ffi::OsStr, path::Path, time::Duration};
+
     use assertr::prelude::*;
-    use std::time::Duration;
-    use std::{ffi::OsStr, path::Path};
     use tokio_process_tools::UnixGracefulSignal;
+
+    use super::{BuildProfile, CargoLeptosMode, cargo_program, command, whole_secs_rounded_up};
 
     fn env_pairs(cmd: &tokio::process::Command) -> Vec<(String, Option<String>)> {
         cmd.as_std()

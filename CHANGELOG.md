@@ -7,13 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-08-09
+## [0.4.0] - 2026-10-09
 
 ### Added
 
 - `LeptosTestAppConfig::with_build_profile(BuildProfile::Release)` builds the app with `cargo leptos serve --release`
   (or `watch --release`). Defaults to `BuildProfile::Dev`. See the README's "Build profile".
 - `LeptosTestApp` now implements `Debug`, showing its base URL, site address, reload port, and app directory.
+- `CapturedOutput`, the recent stdout/stderr of `cargo leptos`, attached to every startup-failure report. Find it with
+  `CapturedOutput::find_in(&report)`, even after further context was added. Printing the whole report still shows it.
+- `LeptosBrowserTestError::SitePortInUse` and `LeptosBrowserTestError::ReloadPortInUse`. When a port collision can't be
+  retried (the port was pinned, or every retry collided too), startup now fails with one of these as soon as the bind
+  failure shows up in the output. Previously it fell through to a generic error, and in `watch` mode it waited for the
+  full startup timeout.
+
+### Changed
+
+- **Breaking:** `LeptosBrowserTestError::StartupStdoutClosed` is renamed to `StartupOutputClosed`, since it means
+  that either stdout or stderr closed.
+- **Breaking:** `LeptosBrowserTestError` is `#[non_exhaustive]`. Matches on it need a wildcard arm.
+- **Breaking:** Startup-failure errors no longer embed the captured output. `StartupOutputClosed`, `StartupTimedOut`
+  and `StreamRead` are now struct variants with only `app_name` and `expected_line` (plus `timeout` and `reason` for
+  `StartupTimedOut`), and their messages are a single line. The captured output moved to the `CapturedOutput` report
+  attachment. `StartupFailureContext` is removed. Code that read `ctx.stdout_tail` / `ctx.stderr_tail` should use
+  `CapturedOutput::find_in(&report)` and its `stdout()` / `stderr()` instead.
 
 ### Fixed
 
@@ -26,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Only collisions on an auto-allocated port are retried. A pinned `site_addr` is no longer retried just because
   `reload_port` was left unpinned (and vice versa).
 - Startup now makes up to three retries after the first attempt, as documented, instead of three attempts in total.
+- The output captured for a failed startup now reliably includes the line that ended the wait (for example the bind
+  failure). It could previously be missing because the log capture lagged slightly behind the readiness check.
 
 ## [0.3.0] - 2026-06-17
 
@@ -101,9 +120,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/fixtures/leptos-ssr-app`.
 - GitHub CI covering format, check, clippy, test, build, doc, and an MSRV gate at the declared `rust-version` (1.89.0).
 
-[Unreleased]: https://github.com/lpotthast/leptos-browser-test/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/lpotthast/leptos-browser-test/compare/v0.4.0...HEAD
 
-[0.3.1]: https://github.com/lpotthast/leptos-browser-test/compare/v0.3.0...v0.3.1
+[0.4.0]: https://github.com/lpotthast/leptos-browser-test/compare/v0.3.0...v0.4.0
 
 [0.3.0]: https://github.com/lpotthast/leptos-browser-test/compare/v0.2.0...v0.3.0
 

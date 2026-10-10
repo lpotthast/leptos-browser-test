@@ -1,12 +1,18 @@
-use crate::{LeptosBrowserTestError, error::StartupFailureContext};
-use rootcause::{IntoReport, Report, bail};
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Duration,
+};
+
+use rootcause::{IntoReport, Report};
 use tokio_process_tools::{
     LineParsingOptions, StreamReadError, TerminateOnDrop, WaitForLineResult,
 };
 
 use super::{OutputStream, collision::PortCollision, logs::StartupLogs, retry::RetryPolicy};
+use crate::LeptosBrowserTestError;
 
 /// How a startup attempt that did not fail ended.
 pub(crate) enum StartupOutcome {
@@ -24,6 +30,10 @@ pub(crate) struct StartupExpectation<'a> {
     pub(crate) timeout: Duration,
     /// Why `timeout` was chosen, reported if it elapses.
     pub(crate) timeout_reason: &'a str,
+    /// The site address, reported if the app can't bind it.
+    pub(crate) site_addr: &'a str,
+    /// The reload port, reported if cargo-leptos can't bind it.
+    pub(crate) reload_port: u16,
 }
 
 /// Waits until `process` prints the expected startup line on stdout or stderr, or reports a port
@@ -31,8 +41,10 @@ pub(crate) struct StartupExpectation<'a> {
 ///
 /// # Errors
 ///
-/// Returns an error if both output streams close first, the startup timeout elapses, or reading
-/// the output fails. Each error embeds the recent output captured in `logs`.
+/// Returns an error if both output streams close first, the startup timeout elapses, reading the
+/// output fails, or a port collision is reported that `retry_policy` does not allow retrying.
+/// Each error report carries the output captured in `logs` as a
+/// [`CapturedOutput`](super::CapturedOutput) attachment.
 pub(crate) async fn wait_for_ready(
     process: &TerminateOnDrop<OutputStream>,
     logs: &StartupLogs,
@@ -46,37 +58,79 @@ pub(crate) async fn wait_for_ready(
         expected.app_name,
     );
 
+    let stdout_watch = Arc::new(LineWatch::default());
+    let stderr_watch = Arc::new(LineWatch::default());
     let startup_waiter = wait_for_startup_line(
         process,
         expected.startup_line,
         expected.timeout,
-        retry_policy,
+        &stdout_watch,
+        &stderr_watch,
     );
     process.seal_output_replay();
 
-    match startup_waiter.await {
+    let app_name = || expected.app_name.to_owned();
+    let expected_line = || expected.startup_line.to_owned();
+    let outcome = match startup_waiter.await {
         Ok(StartupWait::Ready) => Ok(StartupOutcome::Ready),
-        Ok(StartupWait::PortCollision(collision)) => Ok(StartupOutcome::PortCollision(collision)),
+        Ok(StartupWait::PortCollision(collision)) if retry_policy.retries(collision) => {
+            Ok(StartupOutcome::PortCollision(collision))
+        }
+        Ok(StartupWait::PortCollision(PortCollision::Site)) => {
+            Err(Report::new(LeptosBrowserTestError::SitePortInUse {
+                app_name: app_name(),
+                site_addr: expected.site_addr.to_owned(),
+            }))
+        }
+        Ok(StartupWait::PortCollision(PortCollision::Reload)) => {
+            Err(Report::new(LeptosBrowserTestError::ReloadPortInUse {
+                app_name: app_name(),
+                reload_port: expected.reload_port,
+            }))
+        }
         Ok(StartupWait::StreamClosed) => {
-            bail!(LeptosBrowserTestError::StartupStdoutClosed(
-                startup_failure_context(expected, logs),
-            ));
+            Err(Report::new(LeptosBrowserTestError::StartupOutputClosed {
+                app_name: app_name(),
+                expected_line: expected_line(),
+            }))
         }
-        Ok(StartupWait::Timeout) => {
-            bail!(LeptosBrowserTestError::StartupTimedOut {
-                ctx: startup_failure_context(expected, logs),
-                timeout: expected.timeout,
-                reason: expected.timeout_reason.to_owned(),
-            });
-        }
+        Ok(StartupWait::Timeout) => Err(Report::new(LeptosBrowserTestError::StartupTimedOut {
+            app_name: app_name(),
+            expected_line: expected_line(),
+            timeout: expected.timeout,
+            reason: expected.timeout_reason.to_owned(),
+        })),
         Err(err) => {
             let err: Report<StreamReadError> = err.into_report();
-            Err(
-                err.context(LeptosBrowserTestError::StreamRead(startup_failure_context(
-                    expected, logs,
-                ))),
-            )
+            Err(err.context(LeptosBrowserTestError::StreamRead {
+                app_name: app_name(),
+                expected_line: expected_line(),
+            }))
         }
+    };
+    match outcome {
+        Ok(outcome) => Ok(outcome),
+        Err(report) => {
+            let output = logs
+                .snapshot_after(stdout_watch.seen(), stderr_watch.seen())
+                .await;
+            Err(report.attach(output))
+        }
+    }
+}
+
+/// What the waiter on one output stream observed.
+#[derive(Default)]
+struct LineWatch {
+    /// How many lines the waiter has seen, including the one it stopped on.
+    seen: AtomicUsize,
+    /// Set when the waiter stopped on a port collision rather than the startup line.
+    collision: OnceLock<PortCollision>,
+}
+
+impl LineWatch {
+    fn seen(&self) -> usize {
+        self.seen.load(Ordering::Acquire)
     }
 }
 
@@ -89,7 +143,7 @@ enum StartupWait {
 }
 
 /// Subscribes to stdout and stderr immediately and returns a future racing both for the startup
-/// line, or for a port collision that `retry_policy` allows retrying.
+/// line or a port collision.
 ///
 /// Deliberately not an `async fn`: the subscriptions must exist before the caller seals the
 /// output replay, but an `async fn` body would only run (and subscribe) on first poll.
@@ -97,19 +151,25 @@ fn wait_for_startup_line(
     process: &TerminateOnDrop<OutputStream>,
     startup_line: &str,
     timeout: Duration,
-    retry_policy: RetryPolicy,
+    stdout_watch: &Arc<LineWatch>,
+    stderr_watch: &Arc<LineWatch>,
 ) -> impl Future<Output = Result<StartupWait, StreamReadError>> {
-    let (stdout_waiter, stdout_collision) =
-        wait_for_line_or_collision(process.stdout(), startup_line, timeout, retry_policy);
-    let (stderr_waiter, stderr_collision) =
-        wait_for_line_or_collision(process.stderr(), startup_line, timeout, retry_policy);
+    let stdout_waiter =
+        wait_for_line_or_collision(process.stdout(), startup_line, timeout, stdout_watch);
+    let stderr_waiter =
+        wait_for_line_or_collision(process.stderr(), startup_line, timeout, stderr_watch);
+    let stdout_watch = Arc::clone(stdout_watch);
+    let stderr_watch = Arc::clone(stderr_watch);
 
-    // A waiter stops on either the startup line or a retryable collision. Its collision slot
-    // tells the two apart.
-    let matched = |collision: &OnceLock<PortCollision>| {
-        collision.get().map_or(StartupWait::Ready, |collision| {
-            StartupWait::PortCollision(*collision)
-        })
+    // A waiter stops on either the startup line or a port collision. Its watch tells the two
+    // apart.
+    let matched = |watch: &LineWatch| {
+        watch
+            .collision
+            .get()
+            .map_or(StartupWait::Ready, |collision| {
+                StartupWait::PortCollision(*collision)
+            })
     };
 
     async move {
@@ -129,22 +189,23 @@ fn wait_for_startup_line(
                 }
             }
 
-            if stdout_result == Some(WaitForLineResult::Matched) {
-                return Ok(matched(&stdout_collision));
-            }
-            if stderr_result == Some(WaitForLineResult::Matched) {
-                return Ok(matched(&stderr_collision));
-            }
-
             match (stdout_result, stderr_result) {
-                (Some(WaitForLineResult::StreamClosed), Some(WaitForLineResult::StreamClosed)) => {
+                (Some(WaitForLineResult::Matched), _) => {
+                    return Ok(matched(&stdout_watch));
+                }
+                (_, Some(WaitForLineResult::Matched)) => {
+                    return Ok(matched(&stderr_watch));
+                }
+                (Some(WaitForLineResult::StreamClosed), _) => {
                     return Ok(StartupWait::StreamClosed);
                 }
-                (Some(stdout), Some(stderr)) => {
-                    debug_assert!(
-                        matches!(stdout, WaitForLineResult::Timeout)
-                            || matches!(stderr, WaitForLineResult::Timeout)
-                    );
+                (_, Some(WaitForLineResult::StreamClosed)) => {
+                    return Ok(StartupWait::StreamClosed);
+                }
+                (Some(WaitForLineResult::Timeout), _) => {
+                    return Ok(StartupWait::Timeout);
+                }
+                (_, Some(WaitForLineResult::Timeout)) => {
                     return Ok(StartupWait::Timeout);
                 }
                 _ => {}
@@ -153,47 +214,31 @@ fn wait_for_startup_line(
     }
 }
 
-/// Waits on one output stream for the startup line or a collision that `retry_policy` allows
-/// retrying. The returned slot is set when the wait stopped because of such a collision.
+/// Waits on one output stream for the startup line or a port collision, recording what it saw in
+/// `watch`.
 fn wait_for_line_or_collision(
     stream: &OutputStream,
     startup_line: &str,
     timeout: Duration,
-    retry_policy: RetryPolicy,
-) -> (
-    impl Future<Output = Result<WaitForLineResult, StreamReadError>>,
-    Arc<OnceLock<PortCollision>>,
-) {
+    watch: &Arc<LineWatch>,
+) -> impl Future<Output = Result<WaitForLineResult, StreamReadError>> {
     let expected_line = startup_line.to_owned();
-    let collision = Arc::new(OnceLock::new());
-    let collision_slot = Arc::clone(&collision);
-    let waiter = stream.wait_for_line(
+    let watch = Arc::clone(watch);
+    stream.wait_for_line(
         timeout,
         move |line| {
+            watch.seen.fetch_add(1, Ordering::Release);
             if line.contains(&expected_line) {
                 return true;
             }
             match PortCollision::detect(&line) {
-                Some(detected) if retry_policy.retries(detected) => {
-                    let _ = collision_slot.set(detected);
+                Some(detected) => {
+                    let _ = watch.collision.set(detected);
                     true
                 }
-                _ => false,
+                None => false,
             }
         },
         LineParsingOptions::default(),
-    );
-    (waiter, collision)
-}
-
-fn startup_failure_context(
-    expected: &StartupExpectation<'_>,
-    logs: &StartupLogs,
-) -> StartupFailureContext {
-    StartupFailureContext {
-        app_name: expected.app_name.to_owned(),
-        expected_line: expected.startup_line.to_owned(),
-        stdout_tail: logs.stdout_tail(),
-        stderr_tail: logs.stderr_tail(),
-    }
+    )
 }

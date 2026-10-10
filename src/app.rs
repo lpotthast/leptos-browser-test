@@ -1,3 +1,16 @@
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use rootcause::{Report, bail, prelude::ResultExt};
+use tokio::io::AsyncWrite;
+use tokio_process_tools::{
+    AutoName, Consumable, Consumer, DEFAULT_MAX_BUFFERED_CHUNKS, DEFAULT_READ_CHUNK_SIZE,
+    GracefulShutdown, LineParsingOptions, Next, NumBytesExt, ParseLines, Process, TerminateOnDrop,
+};
+use unwrap_infallible::UnwrapInfallible;
+
 use crate::{
     LeptosBrowserTestError, LeptosTestAppConfig, cargo_leptos, ports,
     site::{format_base_url, parse_socket_addr},
@@ -5,15 +18,6 @@ use crate::{
         OutputStream, RetryPolicy, StartupExpectation, StartupLogs, StartupOutcome, wait_for_ready,
     },
 };
-use rootcause::{Report, bail, prelude::ResultExt};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-use tokio::io::AsyncWrite;
-use tokio_process_tools::{
-    AutoName, Consumable, Consumer, DEFAULT_MAX_BUFFERED_CHUNKS, DEFAULT_READ_CHUNK_SIZE,
-    GracefulShutdown, LineParsingOptions, Next, NumBytesExt, ParseLines, Process, TerminateOnDrop,
-};
-use unwrap_infallible::UnwrapInfallible;
 
 /// A running Leptos test app process.
 ///
@@ -102,7 +106,7 @@ pub(crate) async fn start_configured_app(
     let mut attempt = 1;
 
     // Only ever exits via `return`. The final attempt's `RetryPolicy` retries nothing, so
-    // `wait_for_ready` can't report a collision for it.
+    // `wait_for_ready` turns any collision on it into an error instead of a retry.
     loop {
         let retry_policy = RetryPolicy::for_attempt(&config, attempt);
         let runtime = resolve_runtime_config(&config)?;
@@ -112,6 +116,8 @@ pub(crate) async fn start_configured_app(
             startup_line: &runtime.startup_line,
             timeout: config.startup_timeout,
             timeout_reason: &config.startup_timeout_reason,
+            site_addr: &runtime.site_addr,
+            reload_port: runtime.reload_port,
         };
         let outcome =
             wait_for_ready(&spawned.process, &spawned.logs, &expected, retry_policy).await?;
