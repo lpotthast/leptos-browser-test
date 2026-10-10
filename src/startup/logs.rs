@@ -4,7 +4,9 @@ use std::{
     sync::{Arc, Mutex, PoisonError},
 };
 
-use rootcause::{Report, report_attachment::ReportAttachmentRef};
+use rootcause::{
+    Report, ReportRef, markers::ReportOwnershipMarker, report_attachment::ReportAttachmentRef,
+};
 
 /// The recent output of one startup attempt, recorded by its readiness waiters.
 ///
@@ -80,8 +82,20 @@ impl CapturedOutput {
     ///
     /// Returns `None` for failures that happened before `cargo leptos` was running, since those
     /// have no output.
+    ///
+    /// Accepts any report, whatever its ownership and thread-safety markers. For a
+    /// [`ReportRef`], for example one obtained while walking nested reports, use
+    /// [`find_in_ref`](Self::find_in_ref).
     #[must_use]
-    pub fn find_in<C: ?Sized>(report: &Report<C>) -> Option<&Self> {
+    pub fn find_in<C: ?Sized, O: ReportOwnershipMarker, T>(
+        report: &Report<C, O, T>,
+    ) -> Option<&Self> {
+        Self::find_in_ref(report.as_ref())
+    }
+
+    /// Like [`find_in`](Self::find_in), but for a [`ReportRef`].
+    #[must_use]
+    pub fn find_in_ref<C: ?Sized, O, T>(report: ReportRef<'_, C, O, T>) -> Option<&Self> {
         report.iter_reports().find_map(|node| {
             node.attachments()
                 .iter()
@@ -219,6 +233,40 @@ mod tests {
             .into_dynamic();
 
         let found = CapturedOutput::find_in(&report).map(CapturedOutput::stderr);
+        assert_that!(found).is_equal_to(Some("err-line"));
+    }
+
+    #[test]
+    fn find_in_accepts_cloneable_and_local_reports() {
+        let logs = StartupLogs::new(10);
+        logs.stderr.push("err-line");
+        let cloneable = report!("startup failed")
+            .attach(logs.snapshot())
+            .into_cloneable();
+        let local = report!("startup failed")
+            .attach(logs.snapshot())
+            .into_local();
+
+        assert_that!(CapturedOutput::find_in(&cloneable).map(CapturedOutput::stderr))
+            .is_equal_to(Some("err-line"));
+        assert_that!(CapturedOutput::find_in(&local).map(CapturedOutput::stderr))
+            .is_equal_to(Some("err-line"));
+    }
+
+    #[test]
+    fn find_in_ref_searches_below_the_given_report() {
+        let logs = StartupLogs::new(10);
+        logs.stderr.push("err-line");
+        let report: Report = report!("startup failed")
+            .attach(logs.snapshot())
+            .context("while running browser tests")
+            .into_dynamic();
+
+        let found = report
+            .iter_sub_reports()
+            .find_map(CapturedOutput::find_in_ref)
+            .map(CapturedOutput::stderr);
+
         assert_that!(found).is_equal_to(Some("err-line"));
     }
 
