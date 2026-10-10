@@ -1,8 +1,9 @@
 /// Which port a startup attempt failed to bind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PortCollision {
-    /// The app could not bind its site address.
-    Site,
+    /// The app could not bind an address, most likely its site address. The output doesn't
+    /// reliably say which one.
+    App,
     /// cargo-leptos (watch mode) could not bind the reload port.
     Reload,
 }
@@ -21,14 +22,14 @@ impl PortCollision {
         if lowered.contains("address already in use")
             || lowered.contains("only one usage of each socket address")
         {
-            return Some(Self::Site);
+            return Some(Self::App);
         }
         None
     }
 
     pub(crate) fn port_name(self) -> &'static str {
         match self {
-            Self::Site => "site",
+            Self::App => "app",
             Self::Reload => "reload",
         }
     }
@@ -45,7 +46,7 @@ mod tests {
         assert_that!(PortCollision::detect(
             "Error: Address already in use (os error 48)"
         ))
-        .is_equal_to(Some(PortCollision::Site));
+        .is_equal_to(Some(PortCollision::App));
     }
 
     #[test]
@@ -53,7 +54,7 @@ mod tests {
         assert_that!(PortCollision::detect(
             "thread 'main' panicked: address already in use"
         ))
-        .is_equal_to(Some(PortCollision::Site));
+        .is_equal_to(Some(PortCollision::App));
     }
 
     #[test]
@@ -61,7 +62,7 @@ mod tests {
         assert_that!(PortCollision::detect(
             "Only one usage of each socket address (protocol/network address/port) is normally permitted"
         ))
-        .is_equal_to(Some(PortCollision::Site));
+        .is_equal_to(Some(PortCollision::App));
     }
 
     #[test]

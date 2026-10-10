@@ -85,30 +85,40 @@ pub enum LeptosBrowserTestError {
         expected_line: String,
     },
 
-    /// The app could not bind its site address because the port is already in use.
+    /// The app reported that an address it tried to bind is already in use.
     ///
-    /// Reported as soon as the bind failure shows up in the output, without waiting for the
-    /// startup timeout. Startup only gives up like this when it can't retry with a fresh port:
-    /// the site address was pinned with
-    /// [`with_site_addr`](crate::LeptosTestAppConfig::with_site_addr), or every retry with an
-    /// auto-allocated port collided as well.
+    /// This is usually the site address. The output doesn't reliably say which address failed,
+    /// though, so a taken port of an auxiliary listener (gRPC, metrics) ends up here as well. The
+    /// captured output shows the actual bind failure.
+    ///
+    /// A collision only counts if the startup line doesn't follow it. In
+    /// [`Serve`](CargoLeptosMode::Serve) mode, that is known once cargo-leptos exits. In
+    /// [`Watch`](CargoLeptosMode::Watch) mode, cargo-leptos keeps running after the app
+    /// failed, so startup gives the startup line a few seconds before reporting the collision,
+    /// without waiting for the startup timeout. Startup only gives up like this when it can't
+    /// retry with a fresh port: the site address was pinned with
+    /// [`with_site_addr`](crate::LeptosTestAppConfig::with_site_addr), or the collision happened
+    /// on the final attempt.
     ///
     /// The report carries the recent output of `cargo leptos` as a
     /// [`CapturedOutput`](crate::CapturedOutput) attachment.
-    #[error("{app_name} could not bind site address {site_addr} because it is already in use.")]
-    SitePortInUse {
+    #[error(
+        "{app_name} reported an address already in use while starting at site address {site_addr}. See the captured output for which address failed."
+    )]
+    PortInUse {
         /// The descriptive app name.
         app_name: String,
-        /// The site address the app tried to bind.
+        /// The site address the app was started with.
         site_addr: String,
     },
 
     /// cargo-leptos could not bind the reload port because it is already in use.
     ///
-    /// Only happens in [`Watch`](crate::CargoLeptosMode::Watch) mode, which serves the reload
-    /// port. Like [`SitePortInUse`](Self::SitePortInUse), this is reported immediately, once the
-    /// reload port was pinned with
-    /// [`with_reload_port`](crate::LeptosTestAppConfig::with_reload_port) or every retry collided.
+    /// Only happens in [`Watch`](CargoLeptosMode::Watch) mode, which serves the reload
+    /// port. Like [`PortInUse`](Self::PortInUse), it is reported without waiting for the
+    /// startup timeout, once the reload port was pinned with
+    /// [`with_reload_port`](crate::LeptosTestAppConfig::with_reload_port) or the collision
+    /// happened on the final attempt.
     ///
     /// The report carries the recent output of `cargo leptos` as a
     /// [`CapturedOutput`](crate::CapturedOutput) attachment.
@@ -178,13 +188,13 @@ mod tests {
     }
 
     #[test]
-    fn site_port_in_use_display_matches_documented_format() {
-        let err = LeptosBrowserTestError::SitePortInUse {
+    fn port_in_use_display_matches_documented_format() {
+        let err = LeptosBrowserTestError::PortInUse {
             app_name: "demo".to_owned(),
             site_addr: "127.0.0.1:3000".to_owned(),
         };
         assert_that!(err.to_string()).is_equal_to(
-            "demo could not bind site address 127.0.0.1:3000 because it is already in use."
+            "demo reported an address already in use while starting at site address 127.0.0.1:3000. See the captured output for which address failed."
                 .to_owned(),
         );
     }

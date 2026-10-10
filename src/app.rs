@@ -118,6 +118,7 @@ pub(crate) async fn start_configured_app(
             timeout_reason: &config.startup_timeout_reason,
             site_addr: &runtime.site_addr,
             reload_port: runtime.reload_port,
+            mode: config.mode,
         };
         let outcome =
             wait_for_ready(&spawned.process, &spawned.logs, &expected, retry_policy).await?;

@@ -16,7 +16,7 @@ include = ["/src/**", "/README.md", "/CHANGELOG.md", "/LICENSE-*"]
 [dependencies]
 rootcause = { version = "0.13.0", default-features = false }
 thiserror = { version = "2.0.18", default-features = false }
-tokio = { version = "1.50.0", default-features = false, features = ["io-std", "io-util", "macros", "process"] }
+tokio = { version = "1.50.0", default-features = false, features = ["io-std", "io-util", "macros", "process", "sync", "time"] }
 tokio-process-tools = { version = "0.11.2", default-features = false }
 tracing = { version = "0.1.44", default-features = false }
 unwrap-infallible = { version = "1.0.0", default-features = false }

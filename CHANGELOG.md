@@ -16,10 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `LeptosTestApp` now implements `Debug`, showing its base URL, site address, reload port, and app directory.
 - `CapturedOutput`, the recent stdout/stderr of `cargo leptos`, attached to every startup-failure report. Find it with
   `CapturedOutput::find_in(&report)`, even after further context was added. Printing the whole report still shows it.
-- `LeptosBrowserTestError::SitePortInUse` and `LeptosBrowserTestError::ReloadPortInUse`. When a port collision can't be
-  retried (the port was pinned, or every retry collided too), startup now fails with one of these as soon as the bind
-  failure shows up in the output. Previously it fell through to a generic error, and in `watch` mode it waited for the
-  full startup timeout.
+- `LeptosBrowserTestError::PortInUse` and `LeptosBrowserTestError::ReloadPortInUse`. When a port collision can't be
+  retried (the port was pinned, or it happened on the final attempt), startup now fails with one of these. Previously
+  it fell through to a generic error, and in `watch` mode it waited for the full startup timeout. `PortInUse` covers
+  any address the app failed to bind, the site address or an auxiliary listener, since the output doesn't reliably say
+  which one. Check the captured output for the actual bind failure.
 
 ### Changed
 
@@ -36,10 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Sub-second `with_graceful_shutdown_timeout` values are rounded up to the next whole second instead of truncated, so
   e.g. 500ms no longer becomes a 0s grace period.
-- Port-collision retries are detected from the live output instead of the captured log tail. A collision now aborts
-  the attempt immediately, rather than after the full startup timeout in `watch` mode, and is still detected with
-  `with_startup_log_tail_lines(0)`. Reload-port collisions reported by cargo-leptos (`Reload TCP port … already in use`)
-  are now retried too.
+- Port-collision retries are detected from the live output instead of the captured log tail, so they are still
+  detected with `with_startup_log_tail_lines(0)`. A collision only fails the attempt if the startup line doesn't
+  follow, so an app logging a harmless bind failure (for example of a metrics listener) still starts. In `serve` mode
+  the attempt ends once cargo-leptos exits. In `watch` mode, where cargo-leptos keeps running, it ends 5 seconds after
+  the collision instead of after the full startup timeout. Reload-port collisions reported by cargo-leptos
+  (`Reload TCP port … already in use`) are now retried too.
 - Only collisions on an auto-allocated port are retried. A pinned `site_addr` is no longer retried just because
   `reload_port` was left unpinned (and vice versa).
 - Startup now makes up to three retries after the first attempt, as documented, instead of three attempts in total.

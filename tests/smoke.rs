@@ -181,10 +181,10 @@ async fn pinned_site_port_in_use_fails_fast() {
     let context = err.current_context();
     assert_that!(matches!(
         context,
-        LeptosBrowserTestError::SitePortInUse { site_addr: addr, .. } if *addr == site_addr
+        LeptosBrowserTestError::PortInUse { site_addr: addr, .. } if *addr == site_addr
     ))
     .with_detail_message(format!(
-        "expected SitePortInUse for {site_addr}, got: {context:?}"
+        "expected PortInUse for {site_addr}, got: {context:?}"
     ))
     .is_true();
 

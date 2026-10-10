@@ -29,7 +29,7 @@ impl RetryPolicy {
 
     pub(crate) fn retries(self, collision: PortCollision) -> bool {
         match collision {
-            PortCollision::Site => self.site,
+            PortCollision::App => self.site,
             PortCollision::Reload => self.reload,
         }
     }
@@ -47,7 +47,7 @@ mod tests {
         let config = LeptosTestAppConfig::new("./test-app");
         let retry = RetryPolicy::for_attempt(&config, 1);
 
-        assert_that!(retry.retries(PortCollision::Site)).is_true();
+        assert_that!(retry.retries(PortCollision::App)).is_true();
         assert_that!(retry.retries(PortCollision::Reload)).is_true();
     }
 
@@ -55,12 +55,12 @@ mod tests {
     fn does_not_retry_collisions_on_pinned_ports() {
         let site_pinned = LeptosTestAppConfig::new("./test-app").with_site_addr("127.0.0.1:3000");
         let retry = RetryPolicy::for_attempt(&site_pinned, 1);
-        assert_that!(retry.retries(PortCollision::Site)).is_false();
+        assert_that!(retry.retries(PortCollision::App)).is_false();
         assert_that!(retry.retries(PortCollision::Reload)).is_true();
 
         let reload_pinned = LeptosTestAppConfig::new("./test-app").with_reload_port(3001);
         let retry = RetryPolicy::for_attempt(&reload_pinned, 1);
-        assert_that!(retry.retries(PortCollision::Site)).is_true();
+        assert_that!(retry.retries(PortCollision::App)).is_true();
         assert_that!(retry.retries(PortCollision::Reload)).is_false();
     }
 
@@ -69,7 +69,7 @@ mod tests {
         let config = LeptosTestAppConfig::new("./test-app");
         let retry = RetryPolicy::for_attempt(&config, RetryPolicy::MAX_ATTEMPTS);
 
-        assert_that!(retry.retries(PortCollision::Site)).is_false();
+        assert_that!(retry.retries(PortCollision::App)).is_false();
         assert_that!(retry.retries(PortCollision::Reload)).is_false();
     }
 }

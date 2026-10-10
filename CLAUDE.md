@@ -90,17 +90,23 @@ than adding them to the variants.
    `seal_output_replay()` is called after creating the waiters but *before* awaiting, so late subscribers don't keep
    buffering. That is why `wait_for_startup_line` is deliberately a plain `fn` returning a future, not an `async fn`:
    an `async fn` would only subscribe on first poll, i.e. after the seal. Outcomes map to `StartupTimedOut` /
-   `StartupOutputClosed` (only when both streams closed) / `StreamRead` / `SitePortInUse` / `ReloadPortInUse`, each
+   `StartupOutputClosed` (only when both streams closed) / `StreamRead` / `PortInUse` / `ReloadPortInUse`, each
    with the captured log tails attached as `CapturedOutput`. The waiters and the log consumers are separate
    subscribers, so on failure `StartupLogs::snapshot_after` waits (up to 1s) until the buffers have received as many
    lines as the waiters saw. Otherwise the line that ended the wait can be missing from the attachment.
-5. **Port-collision retry:** the startup waiters also stop on a live output line that `PortCollision::detect` (`src/startup/collision.rs`)
-   classifies as a site collision ("address already in use" or the Windows equivalent) or a reload collision
-   (cargo-leptos's "Reload TCP port … already in use"). If the colliding port was auto-allocated, the process is dropped
-   and startup retries with fresh ports, up to `MAX_PORT_COLLISION_RETRIES` (3) retries, as decided by `RetryPolicy` (`src/startup/retry.rs`). Detection works on the live
-   stream, so it doesn't depend on the log tail size, and in `watch` mode (where cargo-leptos outlives the app's bind
-   panic) it doesn't wait for the startup timeout. Collisions on pinned ports, and any collision on the final attempt,
-   aren't retried. They fail immediately with `SitePortInUse` / `ReloadPortInUse`.
+5. **Port-collision retry:** the startup waiters record live output lines that `PortCollision::detect`
+   (`src/startup/collision.rs`) classifies as an app collision ("address already in use" or the Windows equivalent) or
+   a reload collision (cargo-leptos's "Reload TCP port … already in use"). A recorded collision does not end the wait
+   by itself, because apps can log harmless bind failures (an auxiliary listener giving up) and still start. If the
+   startup line still shows up, startup succeeds. Otherwise the collision becomes the outcome once the output closes
+   (`serve` mode, where cargo-leptos exits after the app's bind panic), once `WATCH_MODE_COLLISION_GRACE_PERIOD` (5s)
+   passes (`watch` mode, where cargo-leptos outlives the panic, so this avoids waiting for the startup timeout), or on
+   timeout. An app collision can't tell which address failed (site or an auxiliary listener), hence the generic
+   `PortInUse`. If the colliding port was auto-allocated, the process is dropped and startup retries
+   with fresh ports, up to `MAX_PORT_COLLISION_RETRIES` (3) retries, as decided by `RetryPolicy`
+   (`src/startup/retry.rs`). Detection works on the live stream, so it doesn't depend on the log tail size. Collisions
+   on pinned ports, and any collision on the final attempt, aren't retried. They fail with `PortInUse` /
+   `ReloadPortInUse`.
 6. The returned `LeptosTestApp` holds a `TerminateOnDrop` handle plus the two replay consumers — keeping them alive
    matters; dropping the consumers would lose log forwarding.
 
