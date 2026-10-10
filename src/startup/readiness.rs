@@ -1,8 +1,5 @@
 use std::{
-    sync::{
-        Arc, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, OnceLock},
     time::Duration,
 };
 
@@ -12,7 +9,12 @@ use tokio_process_tools::{
     LineParsingOptions, StreamReadError, TerminateOnDrop, WaitForLineResult,
 };
 
-use super::{OutputStream, collision::PortCollision, logs::StartupLogs, retry::RetryPolicy};
+use super::{
+    OutputStream,
+    collision::PortCollision,
+    logs::{StartupLogBuffer, StartupLogs},
+    retry::RetryPolicy,
+};
 use crate::{CargoLeptosMode, LeptosBrowserTestError};
 
 /// How long to keep waiting for the startup line after a port collision showed up in `watch` mode.
@@ -44,6 +46,8 @@ pub(crate) struct StartupExpectation<'a> {
     pub(crate) reload_port: u16,
     /// Decides how long a port collision may precede the startup line.
     pub(crate) mode: CargoLeptosMode,
+    /// How many recent lines per stream a startup failure reports.
+    pub(crate) log_tail_lines: usize,
 }
 
 impl StartupExpectation<'_> {
@@ -71,11 +75,10 @@ impl StartupExpectation<'_> {
 ///
 /// Returns an error if both output streams close first, the startup timeout elapses, reading the
 /// output fails, or a port collision is reported that `retry_policy` does not allow retrying.
-/// Each error report carries the output captured in `logs` as a
+/// Each error report carries the output seen while waiting as a
 /// [`CapturedOutput`](super::CapturedOutput) attachment.
 pub(crate) async fn wait_for_ready(
     process: &TerminateOnDrop<OutputStream>,
-    logs: &StartupLogs,
     expected: &StartupExpectation<'_>,
     retry_policy: RetryPolicy,
 ) -> Result<StartupOutcome, Report<LeptosBrowserTestError>> {
@@ -86,15 +89,13 @@ pub(crate) async fn wait_for_ready(
         expected.app_name,
     );
 
-    let stdout_watch = Arc::new(LineWatch::default());
-    let stderr_watch = Arc::new(LineWatch::default());
+    let logs = StartupLogs::new(expected.log_tail_lines);
     let startup_waiter = wait_for_startup_line(
         process,
         expected.startup_line,
         expected.timeout,
         expected.collision_grace_period(),
-        &stdout_watch,
-        &stderr_watch,
+        &logs,
     );
     process.seal_output_replay();
 
@@ -137,28 +138,7 @@ pub(crate) async fn wait_for_ready(
             }))
         }
     };
-    match outcome {
-        Ok(outcome) => Ok(outcome),
-        Err(report) => {
-            let output = logs
-                .snapshot_after(stdout_watch.seen(), stderr_watch.seen())
-                .await;
-            Err(report.attach(output))
-        }
-    }
-}
-
-/// What the waiter on one output stream observed.
-#[derive(Default)]
-struct LineWatch {
-    /// How many lines the waiter has seen, including the one it stopped on.
-    seen: AtomicUsize,
-}
-
-impl LineWatch {
-    fn seen(&self) -> usize {
-        self.seen.load(Ordering::Acquire)
-    }
+    outcome.map_err(|report| report.attach(logs.snapshot()))
 }
 
 /// The first port collision seen on either output stream.
@@ -194,10 +174,10 @@ enum StartupWait {
 }
 
 /// Subscribes to stdout and stderr immediately and returns a future racing both for the startup
-/// line.
+/// line, recording every line it sees in `logs`.
 ///
-/// A port collision seen before the startup line is reported instead of `StreamClosed` or
-/// `Timeout`. With a `collision_grace_period`, it is also reported once that period passed after
+/// Output only counts as closed once both streams closed, so that `logs` holds all of it. A port
+/// collision seen before the startup line is reported instead of `StreamClosed` or `Timeout`. With a `collision_grace_period`, it is also reported once that period passed after
 /// the collision without the startup line showing up.
 ///
 /// Deliberately not an `async fn`: the subscriptions must exist before the caller seals the
@@ -207,22 +187,21 @@ fn wait_for_startup_line(
     startup_line: &str,
     timeout: Duration,
     collision_grace_period: Option<Duration>,
-    stdout_watch: &Arc<LineWatch>,
-    stderr_watch: &Arc<LineWatch>,
+    logs: &StartupLogs,
 ) -> impl Future<Output = Result<StartupWait, StreamReadError>> {
     let collisions = Arc::new(CollisionWatch::default());
     let stdout_waiter = wait_for_line_recording_collisions(
         process.stdout(),
         startup_line,
         timeout,
-        stdout_watch,
+        logs.stdout.clone(),
         Arc::clone(&collisions),
     );
     let stderr_waiter = wait_for_line_recording_collisions(
         process.stderr(),
         startup_line,
         timeout,
-        stderr_watch,
+        logs.stderr.clone(),
         Arc::clone(&collisions),
     );
 
@@ -263,12 +242,11 @@ fn wait_for_startup_line(
                 (Some(WaitForLineResult::Matched), _) | (_, Some(WaitForLineResult::Matched)) => {
                     return Ok(StartupWait::Ready);
                 }
-                (Some(WaitForLineResult::StreamClosed), _)
-                | (_, Some(WaitForLineResult::StreamClosed)) => {
-                    return Ok(collisions.or(StartupWait::StreamClosed));
-                }
                 (Some(WaitForLineResult::Timeout), _) | (_, Some(WaitForLineResult::Timeout)) => {
                     return Ok(collisions.or(StartupWait::Timeout));
+                }
+                (Some(WaitForLineResult::StreamClosed), Some(WaitForLineResult::StreamClosed)) => {
+                    return Ok(collisions.or(StartupWait::StreamClosed));
                 }
                 _ => {}
             }
@@ -276,21 +254,20 @@ fn wait_for_startup_line(
     }
 }
 
-/// Waits on one output stream for the startup line, counting lines in `watch` and recording port
+/// Waits on one output stream for the startup line, recording every line in `log` and port
 /// collisions in `collisions`.
 fn wait_for_line_recording_collisions(
     stream: &OutputStream,
     startup_line: &str,
     timeout: Duration,
-    watch: &Arc<LineWatch>,
+    log: StartupLogBuffer,
     collisions: Arc<CollisionWatch>,
 ) -> impl Future<Output = Result<WaitForLineResult, StreamReadError>> {
     let expected_line = startup_line.to_owned();
-    let watch = Arc::clone(watch);
     stream.wait_for_line(
         timeout,
         move |line| {
-            watch.seen.fetch_add(1, Ordering::Release);
+            log.push(&line);
             if line.contains(&expected_line) {
                 return true;
             }
@@ -305,10 +282,7 @@ fn wait_for_line_recording_collisions(
 
 #[cfg(all(test, unix))]
 mod tests {
-    use std::{
-        sync::Arc,
-        time::{Duration, Instant},
-    };
+    use std::time::{Duration, Instant};
 
     use assertr::prelude::*;
     use tokio::process::Command;
@@ -317,7 +291,8 @@ mod tests {
         NumBytesExt, Process, TerminateOnDrop,
     };
 
-    use super::{LineWatch, OutputStream, PortCollision, StartupWait, wait_for_startup_line};
+    use super::{OutputStream, PortCollision, StartupLogs, StartupWait, wait_for_startup_line};
+    use crate::CapturedOutput;
 
     const STARTUP_LINE: &str = "listening on http://127.0.0.1:3000";
     const HARMLESS_COLLISION: &str =
@@ -350,20 +325,19 @@ mod tests {
         script: &str,
         timeout: Duration,
         collision_grace_period: Option<Duration>,
-    ) -> StartupWait {
+    ) -> (StartupWait, CapturedOutput) {
         let process = spawn_sh(script);
-        let stdout_watch = Arc::new(LineWatch::default());
-        let stderr_watch = Arc::new(LineWatch::default());
+        let logs = StartupLogs::new(10);
         let waiter = wait_for_startup_line(
             &process,
             STARTUP_LINE,
             timeout,
             collision_grace_period,
-            &stdout_watch,
-            &stderr_watch,
+            &logs,
         );
         process.seal_output_replay();
-        waiter.await.expect("read output")
+        let outcome = waiter.await.expect("read output");
+        (outcome, logs.snapshot())
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -371,7 +345,7 @@ mod tests {
         let script =
             format!("echo '{HARMLESS_COLLISION}' >&2; echo '{STARTUP_LINE}'; exec sleep 30");
 
-        let outcome = wait(&script, Duration::from_secs(30), None).await;
+        let (outcome, _) = wait(&script, Duration::from_secs(30), None).await;
 
         assert_that!(outcome).is_equal_to(StartupWait::Ready);
     }
@@ -381,7 +355,7 @@ mod tests {
         let script =
             format!("echo '{HARMLESS_COLLISION}'; sleep 0.2; echo '{STARTUP_LINE}'; exec sleep 30");
 
-        let outcome = wait(
+        let (outcome, _) = wait(
             &script,
             Duration::from_secs(30),
             Some(Duration::from_secs(10)),
@@ -396,7 +370,7 @@ mod tests {
         let script =
             "echo 'thread main panicked: Address already in use (os error 98)' >&2; exit 1";
 
-        let outcome = wait(script, Duration::from_secs(30), None).await;
+        let (outcome, _) = wait(script, Duration::from_secs(30), None).await;
 
         assert_that!(outcome).is_equal_to(StartupWait::PortCollision(PortCollision::App));
     }
@@ -406,7 +380,7 @@ mod tests {
         let script = "echo 'Address already in use (os error 98)' >&2; exec sleep 30";
 
         let started = Instant::now();
-        let outcome = wait(
+        let (outcome, _) = wait(
             script,
             Duration::from_secs(30),
             Some(Duration::from_millis(200)),
@@ -421,14 +395,14 @@ mod tests {
     async fn collision_without_grace_period_is_reported_on_timeout() {
         let script = "echo 'Address already in use (os error 98)' >&2; exec sleep 30";
 
-        let outcome = wait(script, Duration::from_millis(300), None).await;
+        let (outcome, _) = wait(script, Duration::from_millis(300), None).await;
 
         assert_that!(outcome).is_equal_to(StartupWait::PortCollision(PortCollision::App));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn exit_without_collision_is_stream_closed() {
-        let outcome = wait(
+        let (outcome, _) = wait(
             "echo 'error: build failed' >&2; exit 1",
             Duration::from_secs(30),
             None,
@@ -436,5 +410,19 @@ mod tests {
         .await;
 
         assert_that!(outcome).is_equal_to(StartupWait::StreamClosed);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn waits_for_both_streams_to_close_and_captures_all_output() {
+        // stdout closes first. The bind failure only shows up on stderr afterwards.
+        let script = "echo 'compiling'; exec 1>&-; sleep 0.2; \
+            echo 'thread main panicked: Address already in use (os error 98)' >&2; exit 1";
+
+        let (outcome, output) = wait(script, Duration::from_secs(30), None).await;
+
+        assert_that!(outcome).is_equal_to(StartupWait::PortCollision(PortCollision::App));
+        assert_that!(output.stdout()).is_equal_to("compiling");
+        assert_that!(output.stderr())
+            .is_equal_to("thread main panicked: Address already in use (os error 98)");
     }
 }

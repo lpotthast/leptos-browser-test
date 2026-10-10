@@ -26,7 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** `LeptosBrowserTestError::StartupStdoutClosed` is renamed to `StartupOutputClosed`, since it means
-  that either stdout or stderr closed.
+  that both stdout and stderr closed.
 - **Breaking:** `LeptosBrowserTestError` is `#[non_exhaustive]`. Matches on it need a wildcard arm.
 - **Breaking:** Startup-failure errors no longer embed the captured output. `StartupOutputClosed`, `StartupTimedOut`
   and `StreamRead` are now struct variants with only `app_name` and `expected_line` (plus `timeout` and `reason` for
@@ -47,8 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Only collisions on an auto-allocated port are retried. A pinned `site_addr` is no longer retried just because
   `reload_port` was left unpinned (and vice versa).
 - Startup now makes up to three retries after the first attempt, as documented, instead of three attempts in total.
-- The output captured for a failed startup now reliably includes the line that ended the wait (for example the bind
-  failure). It could previously be missing because the log capture lagged slightly behind the readiness check.
+- The output captured for a failed startup is now recorded by the readiness check itself, so it always includes the
+  line that decided the outcome (for example the bind failure). It could previously be missing because the log
+  capture lagged behind the readiness check.
 
 ## [0.3.0] - 2026-06-17
 

@@ -14,9 +14,7 @@ use unwrap_infallible::UnwrapInfallible;
 use crate::{
     LeptosBrowserTestError, LeptosTestAppConfig, cargo_leptos, ports,
     site::{format_base_url, parse_socket_addr},
-    startup::{
-        OutputStream, RetryPolicy, StartupExpectation, StartupLogs, StartupOutcome, wait_for_ready,
-    },
+    startup::{OutputStream, RetryPolicy, StartupExpectation, StartupOutcome, wait_for_ready},
 };
 
 /// A running Leptos test app process.
@@ -92,12 +90,11 @@ struct RuntimeConfig {
     startup_line: String,
 }
 
-/// Live process plus the log buffers and replay handles tied to it.
+/// Live process plus the replay handles tied to it.
 struct SpawnedProcess {
     process: TerminateOnDrop<OutputStream>,
     stdout_replay: Consumer<()>,
     stderr_replay: Consumer<()>,
-    logs: StartupLogs,
 }
 
 pub(crate) async fn start_configured_app(
@@ -119,9 +116,9 @@ pub(crate) async fn start_configured_app(
             site_addr: &runtime.site_addr,
             reload_port: runtime.reload_port,
             mode: config.mode,
+            log_tail_lines: config.startup_log_tail_lines,
         };
-        let outcome =
-            wait_for_ready(&spawned.process, &spawned.logs, &expected, retry_policy).await?;
+        let outcome = wait_for_ready(&spawned.process, &expected, retry_policy).await?;
         match outcome {
             StartupOutcome::Ready => {
                 tracing::info!("{} started at {}", config.app_name, runtime.base_url);
@@ -244,7 +241,6 @@ fn spawn_with_log_capture(
         })?
         .terminate_on_drop(graceful_shutdown);
 
-    let logs = StartupLogs::new(config.startup_log_tail_lines);
     let forward_logs = config.forward_logs;
 
     #[allow(clippy::items_after_statements)]
@@ -264,13 +260,11 @@ fn spawn_with_log_capture(
     // non-blocking mode (once touched) and std print! has no support for that, they just
     // panic when an EAGAIN error is observed. Tokio's stdio handles instead asynchronously
     // wait internally, handling the slow drainage and preventing a blocked runtime.
-    let stdout_buffer = logs.stdout.clone();
     let stdout_replay = process
         .stdout()
         .consume_async(ParseLines::inspect_async(
             LineParsingOptions::default(),
             move |line| {
-                stdout_buffer.push(&line);
                 let line = line.to_string();
                 async move {
                     if forward_logs && let Err(err) = write_to(tokio::io::stdout(), &line).await {
@@ -282,13 +276,11 @@ fn spawn_with_log_capture(
         ))
         .unwrap_infallible();
 
-    let stderr_buffer = logs.stderr.clone();
     let stderr_replay = process
         .stderr()
         .consume_async(ParseLines::inspect_async(
             LineParsingOptions::default(),
             move |line| {
-                stderr_buffer.push(&line);
                 let line = line.to_string();
                 async move {
                     if forward_logs && let Err(err) = write_to(tokio::io::stderr(), &line).await {
@@ -304,7 +296,6 @@ fn spawn_with_log_capture(
         process,
         stdout_replay,
         stderr_replay,
-        logs,
     })
 }
 

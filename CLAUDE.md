@@ -82,18 +82,19 @@ than adding them to the variants.
    `UnixGracefulSignal` → `"SIGINT"`/`"SIGTERM"` mapping has an `unreachable!` arm for the non-exhaustive enum; extend
    it when bumping `tokio-process-tools` adds variants.
 3. Spawn under `tokio_process_tools::Process` with stdout+stderr as `BroadcastOutputStream`s (reliable with
-   backpressure + 1 MB replay). Two `ParseLines::inspect_async` consumers tee lines into the bounded `StartupLogs` ring
-   buffers (`src/startup/logs.rs`) and, when `forward_logs` is true, write to parent stdout/stderr via
-   `tokio::io::stdout()/stderr()` — **not** `print!`, which panics on `EAGAIN` once tokio has put the stdio fds into
+   backpressure + 1 MB replay). Two `ParseLines::inspect_async` consumers drain the streams and, when `forward_logs` is
+   true, write to parent stdout/stderr via `tokio::io::stdout()/stderr()` — **not** `print!`, which panics on `EAGAIN` once tokio has put the stdio fds into
    non-blocking mode.
 4. `wait_for_ready` (`src/startup/readiness.rs`) races `wait_for_line` on **both** stdout and stderr; whichever matches first wins.
    `seal_output_replay()` is called after creating the waiters but *before* awaiting, so late subscribers don't keep
    buffering. That is why `wait_for_startup_line` is deliberately a plain `fn` returning a future, not an `async fn`:
    an `async fn` would only subscribe on first poll, i.e. after the seal. Outcomes map to `StartupTimedOut` /
    `StartupOutputClosed` (only when both streams closed) / `StreamRead` / `PortInUse` / `ReloadPortInUse`, each
-   with the captured log tails attached as `CapturedOutput`. The waiters and the log consumers are separate
-   subscribers, so on failure `StartupLogs::snapshot_after` waits (up to 1s) until the buffers have received as many
-   lines as the waiters saw. Otherwise the line that ended the wait can be missing from the attachment.
+   with the captured log tails attached as `CapturedOutput`. The waiters themselves push every line into the bounded
+   `StartupLogs` ring buffers (`src/startup/logs.rs`) before checking it, so the attachment always contains the line
+   that decided the outcome. Don't move that capture back into the forwarding consumers: as separate subscribers they
+   lag behind the waiters, and the deciding line could be missing. Waiting for both streams to close (not just one)
+   keeps late stderr lines, like a bind panic, in the capture.
 5. **Port-collision retry:** the startup waiters record live output lines that `PortCollision::detect`
    (`src/startup/collision.rs`) classifies as an app collision ("address already in use" or the Windows equivalent) or
    a reload collision (cargo-leptos's "Reload TCP port … already in use"). A recorded collision does not end the wait

@@ -4,7 +4,6 @@ mod readiness;
 mod retry;
 
 pub use logs::CapturedOutput;
-pub(crate) use logs::StartupLogs;
 pub(crate) use readiness::{StartupExpectation, StartupOutcome, wait_for_ready};
 pub(crate) use retry::RetryPolicy;
 use tokio_process_tools::{BroadcastOutputStream, ReliableWithBackpressure, ReplayEnabled};

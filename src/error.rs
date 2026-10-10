@@ -40,7 +40,7 @@ pub enum LeptosBrowserTestError {
         app_name: String,
     },
 
-    /// The frontend stdout or stderr stream closed before startup completed.
+    /// The stdout and stderr streams of `cargo leptos` both closed before startup completed.
     ///
     /// The report carries the recent output of `cargo leptos` as a
     /// [`CapturedOutput`](crate::CapturedOutput) attachment.
