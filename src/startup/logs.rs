@@ -9,7 +9,9 @@ use rootcause::{Report, report_attachment::ReportAttachmentRef};
 /// The recent output of one startup attempt, recorded by its readiness waiters.
 ///
 /// The waiters push each line before checking it, so a snapshot taken after a wait ended always
-/// includes the line that decided it (for example a bind failure).
+/// includes the line that decided it (for example a bind failure). Don't fill these from the log
+/// forwarding consumers instead. As separate subscribers they lag behind the waiters, so that line
+/// could be missing.
 #[derive(Debug, Clone)]
 pub(super) struct StartupLogs {
     pub(super) stdout: StartupLogBuffer,

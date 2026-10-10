@@ -24,6 +24,7 @@ use crate::{
 /// Browser tests should use `#[tokio::test(flavor = "multi_thread")]`.
 pub struct LeptosTestApp {
     _process: TerminateOnDrop<OutputStream>,
+    // Kept alive for as long as the app runs. Dropping them would stop log forwarding.
     _stdout_replay: Consumer<()>,
     _stderr_replay: Consumer<()>,
     base_url: String,
@@ -126,9 +127,8 @@ pub(crate) async fn start_configured_app(
             }
             StartupOutcome::PortCollision(collision) => {
                 tracing::warn!(
-                    "{} {} port collision on attempt {attempt}/{}, retrying with fresh ports",
+                    "{} port collision on attempt {attempt}/{}, retrying with fresh ports. {collision}",
                     config.app_name,
-                    collision.port_name(),
                     RetryPolicy::MAX_ATTEMPTS,
                 );
                 drop(spawned);

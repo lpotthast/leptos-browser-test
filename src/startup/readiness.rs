@@ -11,7 +11,7 @@ use tokio_process_tools::{
 
 use super::{
     OutputStream,
-    collision::PortCollision,
+    collision::{DetectedCollision, PortCollision},
     logs::{StartupLogBuffer, StartupLogs},
     retry::RetryPolicy,
 };
@@ -27,7 +27,7 @@ const WATCH_MODE_COLLISION_GRACE_PERIOD: Duration = Duration::from_secs(5);
 /// How a startup attempt that did not fail ended.
 pub(crate) enum StartupOutcome {
     Ready,
-    PortCollision(PortCollision),
+    PortCollision(DetectedCollision),
 }
 
 /// What `wait_for_ready` waits for, plus the details a startup failure reports.
@@ -40,9 +40,9 @@ pub(crate) struct StartupExpectation<'a> {
     pub(crate) timeout: Duration,
     /// Why `timeout` was chosen, reported if it elapses.
     pub(crate) timeout_reason: &'a str,
-    /// The site address, reported if the app can't bind it.
+    /// The site address, reported if a port is in use.
     pub(crate) site_addr: &'a str,
-    /// The reload port, reported if cargo-leptos can't bind it.
+    /// The reload port, reported if a port is in use.
     pub(crate) reload_port: u16,
     /// Decides how long a port collision may precede the startup line.
     pub(crate) mode: CargoLeptosMode,
@@ -103,20 +103,17 @@ pub(crate) async fn wait_for_ready(
     let expected_line = || expected.startup_line.to_owned();
     let outcome = match startup_waiter.await {
         Ok(StartupWait::Ready) => Ok(StartupOutcome::Ready),
-        Ok(StartupWait::PortCollision(collision)) if retry_policy.retries(collision) => {
+        Ok(StartupWait::PortCollision(collision)) if retry_policy.retries(collision.kind) => {
             Ok(StartupOutcome::PortCollision(collision))
         }
-        Ok(StartupWait::PortCollision(PortCollision::App)) => {
-            Err(Report::new(LeptosBrowserTestError::PortInUse {
-                app_name: app_name(),
-                site_addr: expected.site_addr.to_owned(),
-            }))
-        }
-        Ok(StartupWait::PortCollision(PortCollision::Reload)) => {
-            Err(Report::new(LeptosBrowserTestError::ReloadPortInUse {
-                app_name: app_name(),
-                reload_port: expected.reload_port,
-            }))
+        Ok(StartupWait::PortCollision(collision)) => {
+            let report: Report<LeptosBrowserTestError> =
+                Report::new(LeptosBrowserTestError::PortInUse {
+                    app_name: app_name(),
+                    site_addr: expected.site_addr.to_owned(),
+                    reload_port: expected.reload_port,
+                });
+            Err(report.attach(collision))
         }
         Ok(StartupWait::StreamClosed) => {
             Err(Report::new(LeptosBrowserTestError::StartupOutputClosed {
@@ -144,13 +141,13 @@ pub(crate) async fn wait_for_ready(
 /// The first port collision seen on either output stream.
 #[derive(Default)]
 struct CollisionWatch {
-    first: OnceLock<PortCollision>,
+    first: OnceLock<DetectedCollision>,
     /// Notified once, when `first` is set.
     detected: Notify,
 }
 
 impl CollisionWatch {
-    fn record(&self, collision: PortCollision) {
+    fn record(&self, collision: DetectedCollision) {
         if self.first.set(collision).is_ok() {
             self.detected.notify_one();
         }
@@ -159,7 +156,7 @@ impl CollisionWatch {
     /// The collision, if one was seen, or `otherwise`.
     fn or(&self, otherwise: StartupWait) -> StartupWait {
         self.first.get().map_or(otherwise, |collision| {
-            StartupWait::PortCollision(*collision)
+            StartupWait::PortCollision(collision.clone())
         })
     }
 }
@@ -168,7 +165,7 @@ impl CollisionWatch {
 #[derive(Debug, PartialEq, Eq)]
 enum StartupWait {
     Ready,
-    PortCollision(PortCollision),
+    PortCollision(DetectedCollision),
     StreamClosed,
     Timeout,
 }
@@ -177,8 +174,9 @@ enum StartupWait {
 /// line, recording every line it sees in `logs`.
 ///
 /// Output only counts as closed once both streams closed, so that `logs` holds all of it. A port
-/// collision seen before the startup line is reported instead of `StreamClosed` or `Timeout`. With a `collision_grace_period`, it is also reported once that period passed after
-/// the collision without the startup line showing up.
+/// collision seen before the startup line is reported instead of `StreamClosed` or `Timeout`.
+/// With a `collision_grace_period`, it is also reported once that period passed after the
+/// collision without the startup line showing up.
 ///
 /// Deliberately not an `async fn`: the subscriptions must exist before the caller seals the
 /// output replay, but an `async fn` body would only run (and subscribe) on first poll.
@@ -271,8 +269,13 @@ fn wait_for_line_recording_collisions(
             if line.contains(&expected_line) {
                 return true;
             }
-            if let Some(collision) = PortCollision::detect(&line) {
-                collisions.record(collision);
+            if let Some(kind) = PortCollision::detect(&line)
+                && collisions.first.get().is_none()
+            {
+                collisions.record(DetectedCollision {
+                    kind,
+                    line: line.into_owned(),
+                });
             }
             false
         },
@@ -291,10 +294,14 @@ mod tests {
         NumBytesExt, Process, TerminateOnDrop,
     };
 
-    use super::{OutputStream, PortCollision, StartupLogs, StartupWait, wait_for_startup_line};
-    use crate::CapturedOutput;
+    use super::{
+        DetectedCollision, OutputStream, PortCollision, RetryPolicy, StartupExpectation,
+        StartupLogs, StartupWait, wait_for_ready, wait_for_startup_line,
+    };
+    use crate::{CapturedOutput, CargoLeptosMode, LeptosBrowserTestError, LeptosTestAppConfig};
 
     const STARTUP_LINE: &str = "listening on http://127.0.0.1:3000";
+    const BIND_PANIC: &str = "thread main panicked: Address already in use (os error 98)";
     const HARMLESS_COLLISION: &str =
         "metrics listener 0.0.0.0:9090: Address already in use, disabling metrics";
 
@@ -340,6 +347,13 @@ mod tests {
         (outcome, logs.snapshot())
     }
 
+    fn app_collision(line: &str) -> StartupWait {
+        StartupWait::PortCollision(DetectedCollision {
+            kind: PortCollision::App,
+            line: line.to_owned(),
+        })
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn harmless_collision_before_startup_line_is_ready() {
         let script =
@@ -367,37 +381,36 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn collision_followed_by_exit_is_a_collision() {
-        let script =
-            "echo 'thread main panicked: Address already in use (os error 98)' >&2; exit 1";
+        let script = format!("echo '{BIND_PANIC}' >&2; exit 1");
 
-        let (outcome, _) = wait(script, Duration::from_secs(30), None).await;
+        let (outcome, _) = wait(&script, Duration::from_secs(30), None).await;
 
-        assert_that!(outcome).is_equal_to(StartupWait::PortCollision(PortCollision::App));
+        assert_that!(outcome).is_equal_to(app_collision(BIND_PANIC));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn collision_without_startup_line_ends_after_grace_period() {
-        let script = "echo 'Address already in use (os error 98)' >&2; exec sleep 30";
+        let script = format!("echo '{BIND_PANIC}' >&2; exec sleep 30");
 
         let started = Instant::now();
         let (outcome, _) = wait(
-            script,
+            &script,
             Duration::from_secs(30),
             Some(Duration::from_millis(200)),
         )
         .await;
 
-        assert_that!(outcome).is_equal_to(StartupWait::PortCollision(PortCollision::App));
+        assert_that!(outcome).is_equal_to(app_collision(BIND_PANIC));
         assert_that!(started.elapsed()).is_less_than(Duration::from_secs(10));
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn collision_without_grace_period_is_reported_on_timeout() {
-        let script = "echo 'Address already in use (os error 98)' >&2; exec sleep 30";
+        let script = format!("echo '{BIND_PANIC}' >&2; exec sleep 30");
 
-        let (outcome, _) = wait(script, Duration::from_millis(300), None).await;
+        let (outcome, _) = wait(&script, Duration::from_millis(300), None).await;
 
-        assert_that!(outcome).is_equal_to(StartupWait::PortCollision(PortCollision::App));
+        assert_that!(outcome).is_equal_to(app_collision(BIND_PANIC));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -415,14 +428,45 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn waits_for_both_streams_to_close_and_captures_all_output() {
         // stdout closes first. The bind failure only shows up on stderr afterwards.
-        let script = "echo 'compiling'; exec 1>&-; sleep 0.2; \
-            echo 'thread main panicked: Address already in use (os error 98)' >&2; exit 1";
+        let script =
+            format!("echo 'compiling'; exec 1>&-; sleep 0.2; echo '{BIND_PANIC}' >&2; exit 1");
 
-        let (outcome, output) = wait(script, Duration::from_secs(30), None).await;
+        let (outcome, output) = wait(&script, Duration::from_secs(30), None).await;
 
-        assert_that!(outcome).is_equal_to(StartupWait::PortCollision(PortCollision::App));
+        assert_that!(outcome).is_equal_to(app_collision(BIND_PANIC));
         assert_that!(output.stdout()).is_equal_to("compiling");
-        assert_that!(output.stderr())
-            .is_equal_to("thread main panicked: Address already in use (os error 98)");
+        assert_that!(output.stderr()).is_equal_to(BIND_PANIC);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn port_in_use_report_names_the_reported_line_even_without_captured_output() {
+        let process = spawn_sh(&format!("echo '{BIND_PANIC}' >&2; exit 1"));
+        let expected = StartupExpectation {
+            app_name: "demo",
+            startup_line: STARTUP_LINE,
+            timeout: Duration::from_secs(30),
+            timeout_reason: "test",
+            site_addr: "127.0.0.1:3000",
+            reload_port: 3001,
+            mode: CargoLeptosMode::Serve,
+            log_tail_lines: 0,
+        };
+        let final_attempt = RetryPolicy::for_attempt(
+            &LeptosTestAppConfig::new("./test-app"),
+            RetryPolicy::MAX_ATTEMPTS,
+        );
+
+        let Err(report) = wait_for_ready(&process, &expected, final_attempt).await else {
+            panic!("startup should fail with PortInUse");
+        };
+
+        assert_that!(matches!(
+            report.current_context(),
+            LeptosBrowserTestError::PortInUse { .. }
+        ))
+        .is_true();
+        assert_that!(report.to_string()).contains(format!(
+            "The app reported an address already in use: {BIND_PANIC}"
+        ));
     }
 }

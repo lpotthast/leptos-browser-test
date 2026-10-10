@@ -1,3 +1,5 @@
+use std::fmt;
+
 /// Which port a startup attempt failed to bind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PortCollision {
@@ -26,12 +28,25 @@ impl PortCollision {
         }
         None
     }
+}
 
-    pub(crate) fn port_name(self) -> &'static str {
-        match self {
-            Self::App => "app",
-            Self::Reload => "reload",
-        }
+/// A port collision found in the output, with the line that reported it.
+///
+/// Attached to [`PortInUse`](crate::LeptosBrowserTestError::PortInUse) reports. The line is the
+/// only hint at which port failed, and it may have dropped out of the captured output tail.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DetectedCollision {
+    pub(crate) kind: PortCollision,
+    pub(crate) line: String,
+}
+
+impl fmt::Display for DetectedCollision {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind {
+            PortCollision::App => write!(f, "The app reported an address already in use: "),
+            PortCollision::Reload => write!(f, "cargo-leptos reported the reload port as in use: "),
+        }?;
+        f.write_str(&self.line)
     }
 }
 

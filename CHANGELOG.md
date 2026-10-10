@@ -17,11 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `CapturedOutput`, the recent stdout/stderr of `cargo leptos`, attached to every report of a startup failure that
   happened once `cargo leptos` was running. Find it with `CapturedOutput::find_in(&report)`, even after further
   context was added. Printing the whole report still shows it.
-- `LeptosBrowserTestError::PortInUse` and `LeptosBrowserTestError::ReloadPortInUse`. When a port collision can't be
-  retried (the port was pinned, or it happened on the final attempt), startup now fails with one of these. Previously
-  it fell through to a generic error, and in `watch` mode it waited for the full startup timeout. `PortInUse` covers
-  any address the app failed to bind, the site address or an auxiliary listener, since the output doesn't reliably say
-  which one. Check the captured output for the actual bind failure.
+- `LeptosBrowserTestError::PortInUse`. When a port collision can't be retried (the port was pinned, or it happened on
+  the final attempt), startup now fails with this error. Previously it fell through to a generic error, and in `watch`
+  mode it waited for the full startup timeout. It covers any address the app failed to bind (the site address or an
+  auxiliary listener) as well as cargo-leptos's reload port, since the output doesn't reliably say which one failed.
+  The report carries the output line that reported the collision, which shows the actual bind failure.
 
 ### Changed
 
